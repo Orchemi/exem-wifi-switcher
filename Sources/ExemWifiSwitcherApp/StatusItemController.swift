@@ -529,9 +529,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func openSettings() {
-        let controller = settingsWindow ?? SettingsWindowController { [weak self] in
-            Task { @MainActor in await self?.refreshAndEvaluate() }
-        }
+        // 위치 권한은 값을 넘기지 않고 **물어보는 길**을 넘긴다 — 창이 열려 있는 동안에도 바뀌기 때문이다.
+        let controller = settingsWindow ?? SettingsWindowController(
+            locationAuthorization: { [weak self] in self?.locationAuthority.state ?? .notDetermined },
+            onSaved: { [weak self] in
+                Task { @MainActor in await self?.refreshAndEvaluate() }
+            }
+        )
         settingsWindow = controller
         controller.present(observation: observation)
     }

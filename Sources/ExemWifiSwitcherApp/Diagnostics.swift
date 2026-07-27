@@ -1,5 +1,4 @@
 import AppKit
-import UserNotifications
 import WifiSwitcherCore
 
 /// `--diagnose` 로 실행했을 때의 진단 출력.
@@ -19,6 +18,8 @@ enum Diagnostics {
         let authorization = LocationAuthority().state
         let observation = readOffMainThread(authorization: authorization)
         let enabled = AutoSwitchPreferences.isEnabled(in: UserDefaults.standard)
+        // 권한 판정은 설정 창과 **같은 자리**에서 가져온다. 여기서 문구를 따로 만들면 두 화면이 다른 답을 낸다.
+        let permissions = PermissionReport.resolve(PermissionProbe.readBlocking(location: authorization))
 
         var lines: [String] = []
         lines.append("\(InstallPaths.appName) 진단")
@@ -26,13 +27,13 @@ enum Diagnostics {
         // 이 출력은 문제 보고에 그대로 붙여넣으라고 만든 것이다. 사용자 이름이 함께 나가지 않게 줄인다.
         lines.append("앱 번들        \(PathDisplay.abbreviate(Bundle.main.bundlePath))")
         lines.append("번들 식별자    \(Bundle.main.bundleIdentifier ?? "없음 (번들 밖에서 실행됨)")")
-        lines.append("위치 권한      \(text(for: authorization))")
-        lines.append("알림 권한      \(notificationState())")
+        lines.append("위치 권한      \(permissions.item(.location).diagnosticText)")
+        lines.append("알림 권한      \(permissions.item(.notification).diagnosticText)")
         lines.append("네트워크 감시  \(networkWatchState())")
         lines.append("Wi-Fi 이름     \(observation.ssid.statusText)")
         lines.append("자동 전환      \(enabled ? "켜짐" : "꺼짐")")
-        lines.append("전환 권한      \(observation.helperInstalled ? "설치됨" : "없음 — ./scripts/install.sh 필요")")
-        lines.append("저장 권한      \(saveAuthorityState())")
+        lines.append("전환 권한      \(permissions.item(.switching).diagnosticText)")
+        lines.append("저장 권한      \(permissions.item(.saving).diagnosticText)")
         lines.append("설정 파일      \(text(for: observation.config))")
         lines.append("현재 구성      \(currentConfiguration(observation))")
         lines.append("자동 전환 판정  \(decision(observation, enabled: enabled))")
@@ -61,62 +62,11 @@ enum Diagnostics {
         return box.value
     }
 
-    /// 알림이 막혀 있으면 자동 전환은 **완전히 무성**이 된다. 메뉴바 아이콘까지 보이지 않는 환경에서는
-    /// 이 줄이 "IP 가 언제 바뀌었는지 알 수 없는 이유" 를 알려주는 유일한 자리다.
-    ///
-    /// 권한을 **묻지 않고 지금 상태만 읽는다.** 진단이 승인 창을 띄우면 안 된다.
-    private static func notificationState() -> String {
-        guard Bundle.main.bundleIdentifier != nil, Bundle.main.bundlePath.hasSuffix(".app") else {
-            return "확인 불가 — 앱 번들 밖에서 실행 중입니다"
-        }
-        final class Box: @unchecked Sendable {
-            var value: UNAuthorizationStatus = .notDetermined
-        }
-        let box = Box()
-        let done = DispatchSemaphore(value: 0)
-        // **`Task { }` 를 쓰면 안 된다** — 이 자리에서 만든 작업은 메인 액터에 격리되는데,
-        // 아래에서 메인 스레드를 붙잡고 기다리므로 서로를 기다리는 교착이 된다.
-        Task.detached {
-            box.value = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
-            done.signal()
-        }
-        done.wait()
-
-        switch box.value {
-        case .authorized, .provisional, .ephemeral:
-            return "허용됨"
-        case .denied:
-            return "거부됨 — 전환 알림이 뜨지 않습니다 (시스템 설정 > 알림)"
-        case .notDetermined:
-            return "아직 묻지 않음 (앱을 실행하면 승인 창이 뜹니다)"
-        @unknown default:
-            return "알 수 없음"
-        }
-    }
-
-    /// 설정을 저장할 수 있는 상태인가. "저장이 안 된다" 의 원인이 대개 이 둘 중 하나다.
-    private static func saveAuthorityState() -> String {
-        let installed = FileManager.default.isExecutableFile(atPath: InstallPaths.saveConfigScript)
-        guard installed else { return "없음 — ./scripts/install.sh 필요" }
-        guard PrivilegedShell.currentUserIsAdministrator() else {
-            return "설치됨 — 다만 이 계정은 관리자가 아니라 저장할 수 없습니다"
-        }
-        return "설치됨 (저장할 때 관리자 인증을 한 번 받습니다)"
-    }
-
     /// `SCDynamicStore` 에 실제로 붙을 수 있는지 확인한다. 붙였다가 곧바로 뗀다.
     private static func networkWatchState() -> String {
         let monitor = NetworkChangeMonitor {}
         defer { monitor.stop() }
         return monitor.start() ? "정상 (SCDynamicStore)" : "실패 — 주기 확인으로만 동작합니다"
-    }
-
-    private static func text(for authorization: LocationAuthorizationState) -> String {
-        switch authorization {
-        case .granted: return "승인됨"
-        case .denied: return "거부됨 — 시스템 설정 > 개인정보 보호 및 보안 > 위치 서비스"
-        case .notDetermined: return "아직 묻지 않음 (앱을 실행하면 승인 창이 뜹니다)"
-        }
     }
 
     private static func text(for config: ConfigStatus) -> String {

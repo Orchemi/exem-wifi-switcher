@@ -1,20 +1,11 @@
 @preconcurrency import CoreLocation
 import Foundation
-
-/// 위치 권한의 현재 상태. 시스템 열거형을 그대로 들고 다니지 않고 세 갈래로 좁힌다.
-enum LocationAuthorizationState: Equatable, Sendable {
-    /// 아직 묻지 않았거나 사용자가 답하지 않았다
-    case notDetermined
-    /// 사용자가 거부했거나 관리 정책이 막았다 — 자동 전환이 성립하지 않는다
-    case denied
-    case granted
-}
+import WifiSwitcherCore
 
 /// 위치 권한을 묻고, 그 상태를 지켜본다.
 ///
-/// **왜 위치 권한인가**: macOS 는 Wi-Fi 이름(SSID)을 위치 정보로 취급한다. 권한이 없으면
-/// `CWInterface.ssid()` 가 nil 을 돌려주고, 그러면 여기가 사내인지 밖인지 알 방법이 없다
-/// (Phase 0 실증: `ipconfig`·`system_profiler` 는 `<redacted>` 만 준다).
+/// 상태 자체(`LocationAuthorizationState`)는 코어에 있다 — SSID 판독과 권한 점검이 함께 쓴다.
+/// 여기는 `CLLocationManager` 를 만지는 유일한 자리다.
 ///
 /// 권한은 **번들 식별자에 귀속**되므로 한 번 승인하면 재빌드해도 유지된다.
 @MainActor

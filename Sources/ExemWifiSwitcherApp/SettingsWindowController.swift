@@ -12,6 +12,9 @@ import WifiSwitcherCore
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private let onSaved: () -> Void
+    /// 위치 권한 상태를 가진 쪽(`LocationAuthority`)에 그때그때 물어본다.
+    /// 값을 복사해 두면 시스템 설정에 다녀온 뒤에도 옛 답을 보여준다.
+    private let locationAuthorization: @MainActor () -> LocationAuthorizationState
 
     private let introLabel = SettingsWindowController.makeWrappingLabel(
         font: .systemFont(ofSize: NSFont.smallSystemFontSize),
@@ -34,6 +37,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         color: .secondaryLabelColor
     )
 
+    private let permissionGrid = NSGridView(views: [])
+    /// 항목마다 같은 뷰를 계속 쓴다 — 갱신할 때마다 새로 만들면 열 너비가 그때그때 달라진다.
+    private var permissionRows: [PermissionSubject: PermissionRowViews] = [:]
+    /// 지금 화면에 그려진 판정. 버튼이 무엇을 해야 하는지 여기서 찾는다.
+    private var permissionReport: PermissionReport?
+    /// 마지막으로 시작한 권한 읽기. 겹쳐 들어온 읽기 중 이 번호의 결과만 화면에 옮긴다.
+    private var permissionReadToken = 0
+
     private var observation = Observation.pending
     private var hasBeenShown = false
 
@@ -48,8 +59,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private static var fieldColumnWidth: CGFloat {
         windowWidth - margin * 2 - labelColumnWidth - columnSpacing
     }
+    /// 권한 설명이 줄바꿈되는 폭. 입력 칸과 같은 열에 놓이므로 같은 값이다.
+    fileprivate static var noteWidth: CGFloat { fieldColumnWidth }
 
-    init(onSaved: @escaping () -> Void) {
+    init(
+        locationAuthorization: @escaping @MainActor () -> LocationAuthorizationState,
+        onSaved: @escaping () -> Void
+    ) {
+        self.locationAuthorization = locationAuthorization
         self.onSaved = onSaved
 
         let window = NSWindow(
@@ -63,6 +80,26 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
         window.contentView = makeContentView()
+        observeApplicationActivation()
+    }
+
+    /// 시스템 설정에 다녀와 앱으로 돌아오면 권한을 다시 확인한다.
+    ///
+    /// 이것이 없으면 사용자가 권한을 허용하고 돌아와도 창은 "거부됨" 을 계속 보여준다 —
+    /// 고친 사람에게 안 고쳐졌다고 말하는 셈이다.
+    ///
+    /// 이 컨트롤러는 앱이 살아 있는 동안 유지되므로 관찰을 따로 떼지 않는다.
+    private func observeApplicationActivation() {
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.window?.isVisible == true else { return }
+                self.refreshPermissions()
+            }
+        }
     }
 
     @available(*, unavailable)
@@ -75,6 +112,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     func present(observation: Observation) {
         self.observation = observation
         populate()
+        // 창을 열 때마다 다시 확인한다 — 사용자가 시스템 설정에 다녀왔을 수 있다.
+        refreshPermissions()
         window?.setContentSize(window?.contentView?.fittingSize ?? NSSize(width: Self.windowWidth, height: 320))
         // 사용자가 옮겨 둔 창을 다시 가운데로 끌어오지 않는다.
         if !hasBeenShown {
@@ -115,19 +154,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         loginItemCheckbox.state = LoginItem.isRegistered() ? .on : .off
 
-        // 줄바꿈을 직접 넣는다 — 자동 줄바꿈에 맡기면 명령이 슬래시에서 잘려 읽기 어려워진다.
-        if !observation.helperInstalled {
-            // 설치 안내는 아직 설치되지 않았을 때만 보여준다. 평소에는 없는 편이 낫다.
-            noticeLabel.isHidden = false
-            noticeLabel.stringValue = "전환 권한이 아직 설치돼 있지 않습니다. 앱은 관리자 권한을 대신 얻지 않습니다.\n"
-                + "레포 디렉터리에서 ./scripts/install.sh 를 먼저 실행하세요."
-        } else {
-            // 저장이 관리자 인증을 요구한다는 사실을 미리 알린다. 창이 뜨고 나서 놀라지 않도록.
-            noticeLabel.isHidden = false
-            noticeLabel.stringValue = "설정 파일은 root 소유(0644)라 사용자 권한으로는 바꿀 수 없습니다.\n"
-                + "저장할 때 관리자 인증을 한 번 받습니다. 전환할 때는 묻지 않습니다."
-        }
-
+        // 설치 안내와 '저장할 때 인증을 받는다' 는 이제 아래 권한 섹션이 말한다.
+        // 같은 말을 두 자리에서 하면 어느 쪽이 최신인지 알 수 없게 된다.
         clearIssues()
         showDNSReadFailureIfNeeded()
     }
@@ -159,6 +187,91 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             router: routerField.stringValue,
             dns: dnsField.stringValue
         )
+    }
+
+    // MARK: - 권한 점검
+
+    /// 지금 상태를 다시 읽어 권한 섹션을 새로 그린다.
+    ///
+    /// 읽기는 백그라운드에서 한다 — 파일 확인과 `id -Gn` 이 메인 스레드를 잡으면 창이 굳는다.
+    /// **판정은 하지 않는다.** 읽은 값을 `PermissionReport` 에 넘기고 결과만 옮겨 적는다
+    /// (`--diagnose` 가 쓰는 것과 같은 판정이다).
+    private func refreshPermissions() {
+        permissionReadToken += 1
+        let token = permissionReadToken
+        let location = locationAuthorization()
+        Task { @MainActor in
+            let report = PermissionReport.resolve(await PermissionProbe.read(location: location))
+            // 창을 여는 순간은 활성화되는 순간이기도 해서 읽기가 겹친다. 늦게 시작한 쪽이 먼저 끝나면
+            // 낡은 답이 새 답을 덮으므로, 마지막으로 시작한 읽기만 화면에 옮긴다.
+            guard token == permissionReadToken else { return }
+            render(report)
+        }
+    }
+
+    private func render(_ report: PermissionReport) {
+        permissionReport = report
+        for (index, item) in report.items.enumerated() {
+            guard let row = permissionRows[item.subject] else { continue }
+            row.status.stringValue = item.status
+            // 색은 문제가 있을 때만 쓴다. 다 갖춰진 화면을 초록으로 도배하지 않는다.
+            row.status.textColor = item.state == .actionNeeded ? .systemOrange : .labelColor
+            row.note.stringValue = item.note
+
+            switch item.remedy {
+            case .none:
+                row.button.isHidden = true
+            case .openSettings:
+                row.button.isHidden = false
+                row.button.title = "설정 열기"
+            case .runCommand(let command):
+                row.button.isHidden = false
+                row.button.title = "명령 복사"
+                row.note.stringValue = Self.keepingWhole(command, in: item.note)
+            }
+            row.button.tag = index
+        }
+        window?.setContentSize(window?.contentView?.fittingSize ?? NSSize(width: Self.windowWidth, height: 320))
+    }
+
+    /// 명령이 줄 끝에서 잘리지 않게 한다.
+    ///
+    /// 자동 줄바꿈은 `/` 와 `.` 에서 줄을 끊는다. 그러면 `./scripts/` 와 `install.sh` 가 따로 놓여
+    /// **명령이 두 조각으로 읽힌다.** 사용자가 그대로 옮겨 적어야 하는 문자열이므로 붙여 둔다.
+    /// 화면에만 넣는 표시이고, 복사 버튼은 원래 문자열을 그대로 넘긴다.
+    private static func keepingWhole(_ command: String, in text: String) -> String {
+        let joiner = "\u{2060}"  // WORD JOINER — 폭이 없고 줄바꿈만 막는다
+        let unbreakable = command
+            .replacingOccurrences(of: "/", with: joiner + "/" + joiner)
+            .replacingOccurrences(of: ".", with: joiner + "." + joiner)
+        return text.replacingOccurrences(of: command, with: unbreakable)
+    }
+
+    /// 항목이 내놓은 손잡이를 그대로 실행한다. **앱은 sudo 를 대신 실행하지 않는다** —
+    /// 설치가 필요한 항목에서 하는 일은 명령을 복사해 주는 것까지다.
+    @objc private func performPermissionAction(_ sender: NSButton) {
+        guard let report = permissionReport, report.items.indices.contains(sender.tag) else { return }
+        switch report.items[sender.tag].remedy {
+        case .none:
+            break
+        case .openSettings(let pane):
+            guard let url = URL(string: pane.url) else { return }
+            NSWorkspace.shared.open(url)
+        case .runCommand(let command):
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(command, forType: .string)
+            confirmCopy(on: sender)
+        }
+    }
+
+    /// 복사는 눈에 보이는 변화가 없다. 눌렀는데 아무 일도 없으면 안 된 줄 안다.
+    private func confirmCopy(on button: NSButton) {
+        button.title = "복사됨"
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            guard button.title == "복사됨" else { return }
+            button.title = "명령 복사"
+        }
     }
 
     // MARK: - 저장
@@ -272,6 +385,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             label.stringValue = ""
             errorRows[field]?.isHidden = true
         }
+        // 안내 줄은 칸으로 좁힐 수 없는 문제가 있을 때만 나타난다.
+        noticeLabel.stringValue = ""
+        noticeLabel.isHidden = true
     }
 
     private func fieldControl(for field: DraftField) -> NSTextField? {
@@ -303,9 +419,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         grid.column(at: 0).width = Self.labelColumnWidth
         grid.column(at: 1).xPlacement = .fill
 
-        let separator = NSBox()
-        separator.boxType = .separator
-        separator.translatesAutoresizingMaskIntoConstraints = false
+        let separator = Self.makeSeparator()
+        let permissionSeparator = Self.makeSeparator()
+        let permissionHeader = NSTextField(labelWithString: "권한")
+        permissionHeader.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+
+        buildPermissionGrid()
 
         loginItemCheckbox.target = self
         loginItemCheckbox.action = #selector(toggleLoginItem(_:))
@@ -327,11 +446,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         buttonRow.orientation = .horizontal
         buttonRow.distribution = .fill
 
-        let stack = NSStackView(views: [introLabel, grid, separator, loginItemCheckbox, noticeLabel, buttonRow])
+        let stack = NSStackView(views: [
+            introLabel, grid,
+            separator, permissionHeader, permissionGrid,
+            permissionSeparator, loginItemCheckbox, noticeLabel, buttonRow,
+        ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
         stack.setCustomSpacing(10, after: separator)
+        stack.setCustomSpacing(10, after: permissionHeader)
+        stack.setCustomSpacing(10, after: permissionSeparator)
         stack.setCustomSpacing(6, after: loginItemCheckbox)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
@@ -344,13 +469,53 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
             content.widthAnchor.constraint(equalToConstant: Self.windowWidth),
             grid.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            permissionGrid.widthAnchor.constraint(equalTo: stack.widthAnchor),
             separator.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            permissionSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor),
             introLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             noticeLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             buttonRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
         return content
     }
+
+    /// 권한 항목 넷을 한 번만 만든다.
+    ///
+    /// 갱신할 때 행을 다시 만들지 않는 이유는 **열이 흔들리지 않게** 하기 위해서다.
+    /// 제목 열은 위쪽 입력 폼과 같은 너비를 쓰고(같은 세로선에 걸린다), 상태와 버튼은 한 줄에,
+    /// 설명은 그 아래 줄에 둔다. 상태 글자가 길어지거나 버튼이 사라져도 열은 그대로다.
+    private func buildPermissionGrid() {
+        permissionGrid.translatesAutoresizingMaskIntoConstraints = false
+        permissionGrid.columnSpacing = Self.columnSpacing
+        permissionGrid.rowSpacing = 4
+        permissionGrid.rowAlignment = .firstBaseline
+
+        for (index, subject) in PermissionSubject.allCases.enumerated() {
+            let row = PermissionRowViews(subject: subject)
+
+            row.button.target = self
+            row.button.action = #selector(performPermissionAction(_:))
+            row.button.isHidden = true
+
+            let header = NSStackView(views: [row.status, NSView(), row.button])
+            header.orientation = .horizontal
+            header.alignment = .firstBaseline
+            header.distribution = .fill
+            header.spacing = Self.columnSpacing
+
+            let titleRow = permissionGrid.addRow(with: [row.title, header])
+            // 항목 사이만 벌린다. 상태와 설명은 붙어 있어야 한 항목으로 읽힌다.
+            if index > 0 { titleRow.topPadding = 10 }
+            permissionGrid.addRow(with: [NSGridCell.emptyContentView, row.note])
+
+            permissionRows[subject] = row
+        }
+
+        permissionGrid.column(at: 0).xPlacement = .trailing
+        permissionGrid.column(at: 0).width = Self.labelColumnWidth
+        permissionGrid.column(at: 1).xPlacement = .fill
+    }
+
 
     /// 라벨 + 입력 칸 한 줄, 그리고 그 아래 숨겨진 오류 줄 하나.
     private func addRow(to grid: NSGridView, title: String, control: NSView, field: DraftField?) {
@@ -384,6 +549,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         return field
     }
 
+    private static func makeSeparator() -> NSBox {
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        return separator
+    }
+
     private static func makeWrappingLabel(font: NSFont, color: NSColor) -> NSTextField {
         let label = NSTextField(wrappingLabelWithString: "")
         label.font = font
@@ -391,5 +563,42 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         label.isSelectable = true
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return label
+    }
+}
+
+/// 권한 한 줄이 쓰는 뷰 묶음.
+///
+/// 상태·설명·버튼을 한 자리에 묶어 두면 갱신할 때 **같은 뷰를 계속 쓴다.**
+/// 매번 새로 만들면 글자 길이에 따라 열 너비가 흔들린다.
+@MainActor
+private struct PermissionRowViews {
+
+    let title: NSTextField
+    let status: NSTextField
+    let note: NSTextField
+    let button: NSButton
+
+    init(subject: PermissionSubject) {
+        title = NSTextField(labelWithString: subject.title)
+        title.font = .systemFont(ofSize: NSFont.systemFontSize)
+        title.textColor = .labelColor
+
+        status = NSTextField(labelWithString: "확인 중…")
+        status.font = .systemFont(ofSize: NSFont.systemFontSize)
+        status.lineBreakMode = .byTruncatingTail
+
+        // 읽는 동안에도 '왜 필요한가' 는 이미 안다. 빈 줄로 두면 결과가 올 때 창이 한 번 커진다.
+        note = NSTextField(wrappingLabelWithString: subject.purpose)
+        note.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        note.textColor = .secondaryLabelColor
+        note.isSelectable = true
+        // 줄바꿈 폭을 미리 정해 둔다 — 정하지 않으면 한 줄짜리 폭을 요구해 열 너비를 밀어낸다.
+        note.preferredMaxLayoutWidth = SettingsWindowController.noteWidth
+        note.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        button = NSButton(title: "", target: nil, action: nil)
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
     }
 }
