@@ -1,0 +1,185 @@
+#!/bin/bash
+# ---------------------------------------------------------------------------
+# save-config — 준비된 설정 내용을 설치 자리에 root:wheel 0644 로 놓는다.
+#
+# 설치 위치 : /usr/local/libexec/exem-wifi-switcher/save-config   (root:wheel 0755)
+# 호출 형태 : save-config <준비된-json-파일>
+# 권한 경로 : **관리자 인증**(암호 입력)을 거쳐 root 로 실행된다.
+#
+#   ⚠️  이 스크립트를 /etc/sudoers.d 의 NOPASSWD 목록에 넣지 마라.
+#
+#       설정 파일을 root:wheel 0644 로 잠근 이유가 바로 "사용자 권한 프로세스가 값을
+#       못 바꾸게" 하기 위해서다. 그 값(dns · router)은 무암호로 열려 있는 apply 를 통해
+#       root 의 networksetup 인자가 된다. 저장 경로를 무암호로 열면 잠금이 통째로 무의미해지고,
+#       암호를 모르는 코드가 시스템 DNS 와 기본 게이트웨이를 갈아치울 수 있다.
+#
+#       저장은 온보딩 1회성이라 인증을 받아도 UX 손해가 작다. 전환(apply)은 그대로 무암호다.
+#
+# 되돌리기 : 설정 파일을 지우려면 ./scripts/uninstall.sh
+#
+# 종료 코드
+#   0 성공 / 2 잘못된 인자 / 3 root 아님 / 4 내용 문제 / 5 설치 실패
+# ---------------------------------------------------------------------------
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+LC_ALL=C
+export LC_ALL
+
+CONFIG_DIR=/usr/local/etc/exem-wifi-switcher
+CONFIG_FILE="$CONFIG_DIR/config.json"
+
+# 설정 파일이 이만큼 커질 이유가 없다. 상한을 두어 엉뚱한 파일이 흘러드는 것을 막는다.
+MAX_CONFIG_BYTES=65536
+
+EXIT_USAGE=2
+EXIT_NOT_ROOT=3
+EXIT_CONTENT=4
+EXIT_INSTALL=5
+
+err() { printf '%s\n' "$*" >&2; }
+die() { local code="$1"; shift; err "$*"; exit "$code"; }
+
+usage() {
+    cat <<'USAGE'
+사용법: save-config <준비된-json-파일>
+
+앱이 준비해 둔 설정 내용을 /usr/local/etc/exem-wifi-switcher/config.json 에
+root:wheel 0644 로 놓는다. 관리자 인증을 거쳐 root 로 실행된다.
+USAGE
+}
+
+# --- 안전성 -----------------------------------------------------------------
+
+# 권한 비트가 root 외의 사용자에게 쓰기를 열어 주는가. 열려 있으면 0(참).
+# 판독할 수 없는 값은 위험한 쪽으로 판정한다(fail closed).
+mode_allows_foreign_write() {
+    local perms="${1-}"
+    if [[ ! "$perms" =~ ^[0-7]{3,5}$ ]]; then
+        return 0
+    fi
+    if [ $(( 8#$perms & 8#0022 )) -ne 0 ]; then
+        return 0
+    fi
+    return 1
+}
+
+assert_root_owned() {
+    local path="$1" label="$2" owner perms
+    if [ -L "$path" ]; then
+        die "$EXIT_INSTALL" "$label 이 심볼릭 링크입니다: $path"
+    fi
+    if [ ! -e "$path" ]; then
+        die "$EXIT_INSTALL" "$label 이 없습니다: $path"
+    fi
+    owner=$(stat -f '%u' "$path") || die "$EXIT_INSTALL" "$label 정보를 읽지 못했습니다: $path"
+    if [[ ! "$owner" =~ ^[0-9]+$ ]] || [ "$owner" -ne 0 ]; then
+        die "$EXIT_INSTALL" "$label 의 소유자가 root 가 아닙니다: $path (설치가 손상됐습니다)"
+    fi
+    perms=$(stat -f '%OLp' "$path") || die "$EXIT_INSTALL" "$label 의 권한을 읽지 못했습니다: $path"
+    if mode_allows_foreign_write "$perms"; then
+        die "$EXIT_INSTALL" "$label 을 root 외의 사용자가 쓸 수 있습니다: $path (권한 $perms)"
+    fi
+}
+
+assert_self_is_safe() {
+    local self="${BASH_SOURCE[0]}" directory
+    directory=$(dirname "$self")
+    assert_root_owned "$directory" "권한 스크립트 디렉터리"
+    assert_root_owned "$self" "권한 스크립트"
+}
+
+# --- 내용 검사 ---------------------------------------------------------------
+
+# 넘어온 파일이 정말 "설정 파일" 인지 본다. 값 하나하나의 옳고 그름은 apply 가 적용 직전에
+# 다시 판단하므로, 여기서는 **모양**만 확인한다 — 엉뚱한 파일이 설치 자리에 놓이는 것을 막는다.
+assert_looks_like_config() {
+    local path="$1" count
+
+    # `plutil -lint` 는 확장자와 무관하게 옛 plist 문법으로 먼저 읽으려 해서 JSON 을 거부한다.
+    # 파싱 자체가 되는지는 변환을 시켜 보는 쪽이 정확하다 (출력은 버린다).
+    if ! plutil -convert json -o /dev/null -- "$path" >/dev/null 2>&1; then
+        die "$EXIT_CONTENT" "설정 내용이 올바른 JSON 이 아닙니다"
+    fi
+    if ! plutil -extract service raw -o - -- "$path" >/dev/null 2>&1; then
+        die "$EXIT_CONTENT" "설정에 service 항목이 없습니다"
+    fi
+    if ! plutil -extract defaultProfile raw -o - -- "$path" >/dev/null 2>&1; then
+        die "$EXIT_CONTENT" "설정에 defaultProfile 항목이 없습니다"
+    fi
+    count=$(plutil -extract profiles raw -o - -- "$path" 2>/dev/null) \
+        || die "$EXIT_CONTENT" "설정에 profiles 목록이 없습니다"
+    if [[ ! "$count" =~ ^[0-9]+$ ]] || [ "$count" -lt 1 ]; then
+        die "$EXIT_CONTENT" "설정에 프로필이 하나도 없습니다"
+    fi
+}
+
+# --- 본체 -------------------------------------------------------------------
+
+main() {
+    if [ $# -eq 1 ] && { [ "$1" = "--help" ] || [ "$1" = "-h" ]; }; then
+        usage
+        return 0
+    fi
+    if [ $# -ne 1 ]; then
+        usage >&2
+        die "$EXIT_USAGE" "인자는 준비된 JSON 파일 경로 하나여야 합니다 (받은 인자 수: $#)"
+    fi
+
+    local source="$1" size
+    case "$source" in
+        /*) ;;
+        *) die "$EXIT_USAGE" "절대 경로여야 합니다: '$source'" ;;
+    esac
+
+    if [ "$(id -u)" -ne 0 ]; then
+        die "$EXIT_NOT_ROOT" "이 스크립트는 root 로 실행해야 합니다 (앱이 관리자 인증을 거쳐 호출합니다)"
+    fi
+
+    assert_self_is_safe
+
+    # 준비된 파일은 사용자가 만든 것이다. 심링크·특수 파일·거대한 파일을 그대로 받지 않는다.
+    if [ -L "$source" ]; then
+        die "$EXIT_USAGE" "준비된 파일이 심볼릭 링크입니다: $source"
+    fi
+    if [ ! -f "$source" ]; then
+        die "$EXIT_USAGE" "준비된 파일이 없거나 일반 파일이 아닙니다: $source"
+    fi
+    size=$(stat -f '%z' "$source") || die "$EXIT_USAGE" "준비된 파일의 크기를 읽지 못했습니다: $source"
+    if [[ ! "$size" =~ ^[0-9]+$ ]] || [ "$size" -lt 2 ] || [ "$size" -gt "$MAX_CONFIG_BYTES" ]; then
+        die "$EXIT_USAGE" "준비된 파일의 크기가 설정 파일 범위를 벗어납니다 ($size 바이트)"
+    fi
+
+    assert_looks_like_config "$source"
+
+    # 설정 디렉터리는 root:wheel 0755 여야 한다. 없으면 만들고, 있으면 권한을 맞춘다.
+    if [ ! -d "$CONFIG_DIR" ]; then
+        /usr/bin/install -d -o root -g wheel -m 0755 "$CONFIG_DIR" \
+            || die "$EXIT_INSTALL" "설정 디렉터리를 만들지 못했습니다: $CONFIG_DIR"
+    else
+        if [ -L "$CONFIG_DIR" ]; then
+            die "$EXIT_INSTALL" "설정 디렉터리가 심볼릭 링크입니다: $CONFIG_DIR"
+        fi
+        chown root:wheel "$CONFIG_DIR" || die "$EXIT_INSTALL" "설정 디렉터리 소유자를 맞추지 못했습니다"
+        chmod 0755 "$CONFIG_DIR" || die "$EXIT_INSTALL" "설정 디렉터리 권한을 맞추지 못했습니다"
+    fi
+
+    if [ -L "$CONFIG_FILE" ]; then
+        die "$EXIT_INSTALL" "설정 파일 자리가 심볼릭 링크입니다: $CONFIG_FILE"
+    fi
+
+    # install(1) 은 임시 파일에 쓴 뒤 자리를 바꾼다 — 쓰는 도중에 apply 가 읽어도
+    # 반쯤 쓰인 JSON 을 보지 않는다.
+    /usr/bin/install -o root -g wheel -m 0644 "$source" "$CONFIG_FILE" \
+        || die "$EXIT_INSTALL" "설정 파일을 놓지 못했습니다: $CONFIG_FILE"
+
+    printf '설정을 저장했습니다: %s (root:wheel 0644)\n' "$CONFIG_FILE"
+    return 0
+}
+
+# 테스트에서 이 파일을 source 해 개별 검증 함수를 직접 호출한다.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    set -euo pipefail
+    IFS=$' \t\n'
+    main "$@"
+fi

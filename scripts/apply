@@ -1,0 +1,522 @@
+#!/bin/bash
+# ---------------------------------------------------------------------------
+# apply — 네트워크 구성을 프로필대로 바꾼다. root 로 실행된다.
+#
+# 설치 위치 : /usr/local/libexec/exem-wifi-switcher/apply   (root:wheel 0755)
+# 호출 형태 : sudo -n /usr/local/libexec/exem-wifi-switcher/apply <프로필이름>
+# 허용 근거 : /etc/sudoers.d/exem-wifi-switcher 가 이 경로와 인자 형태만 NOPASSWD 로 연다
+#
+# 이 스크립트는 NOPASSWD 로 root 권한을 얻는다. 즉 **여기서 인자를 잘못 다루면
+# 로컬 권한 상승 취약점이 된다.** 그래서 아래 원칙을 지킨다.
+#
+#   1. 인자는 프로필 **이름 하나**뿐이다. IP 같은 값은 인자로 받지 않는다
+#      (받는 순간 sudoers 로 제한할 수 없는 자유 입력이 된다).
+#   2. 이름은 화이트리스트로 검증한다 — 영문·숫자로 시작하고 이후 영문·숫자·`_`·`-`,
+#      최대 16자. `;` `` ` `` `$` `/` `.` 공백 등은 전부 거부되므로
+#      셸 메타문자·경로 탈출이 성립하지 않는다.
+#   3. 실제 값은 root 소유 설정 파일에서만 읽고, 읽은 값도 다시 형식 검증한다.
+#      설정 파일은 **한 번만 열어 사본을 뜬 뒤** 그 사본만 파싱한다 — 검사한 파일과
+#      실제로 읽는 파일이 다를 수 있는 창(TOCTOU)을 남기지 않는다.
+#   4. eval·셸 확장을 쓰지 않는다. 외부 명령에는 항상 따옴표로 감싼 인자 배열을 넘긴다.
+#   5. 판단할 수 없으면 아무것도 바꾸지 않는다(fail closed). 검사에 필요한 정보를 못 읽으면
+#      통과가 아니라 중단이다.
+#   6. **절반만 적용된 구성을 남기지 않는다.** DNS 를 먼저 걸고 IPv4 를 나중에 건다.
+#      DNS 에서 실패하면 손대기 전 그대로 멈추고, IPv4 에서 실패하면 DNS 를 되돌린다.
+#
+# 종료 코드
+#   0 성공 / 2 잘못된 인자 / 3 root 아님 / 4 설정 문제 / 5 networksetup 실패
+# ---------------------------------------------------------------------------
+
+# 물려받은 PATH·로케일을 신뢰하지 않는다. 로케일 고정은 정규식 문자 범위도 바이트 단위로 못박는다.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+LC_ALL=C
+export LC_ALL
+
+CONFIG_FILE=/usr/local/etc/exem-wifi-switcher/config.json
+PROFILE_NAME_MAX_LENGTH=16
+
+EXIT_USAGE=2
+EXIT_NOT_ROOT=3
+EXIT_CONFIG=4
+EXIT_NETWORKSETUP=5
+
+err() { printf '%s\n' "$*" >&2; }
+die() { local code="$1"; shift; err "$*"; exit "$code"; }
+
+usage() {
+    cat <<'USAGE'
+사용법: apply <프로필이름>
+
+설정 파일(/usr/local/etc/exem-wifi-switcher/config.json)에 정의된 프로필 이름을
+하나만 받는다. root 권한이 필요하며 sudoers 규칙을 통해 호출된다.
+USAGE
+}
+
+# --- 검증 -------------------------------------------------------------------
+
+# 프로필 이름 화이트리스트. 규칙은 Sources/WifiSwitcherCore/ProfileName.swift 및
+# /etc/sudoers.d/exem-wifi-switcher 의 인자 패턴과 **동일해야 한다.**
+validate_profile_name() {
+    local name="${1-}"
+    if [ ${#name} -lt 1 ] || [ ${#name} -gt "$PROFILE_NAME_MAX_LENGTH" ]; then
+        return 1
+    fi
+    if [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+        return 0
+    fi
+    return 1
+}
+
+is_ipv4() {
+    local value="${1-}" octet
+    if [[ ! "$value" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+        return 1
+    fi
+    local IFS=.
+    local parts
+    parts=($value)
+    for octet in "${parts[@]}"; do
+        # 앞자리 0 은 거부한다. 8진수로 해석되면 같은 문자열이 다른 주소가 된다.
+        if [[ "$octet" =~ ^0[0-9]+$ ]]; then
+            return 1
+        fi
+        if [ "$octet" -gt 255 ]; then
+            return 1
+        fi
+    done
+    return 0
+}
+
+ip_to_int() {
+    local IFS=.
+    local parts
+    parts=($1)
+    printf '%s' $(( (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3] ))
+}
+
+# 1비트가 앞쪽에 연속인지 검사한다 (255.255.0.255 같은 값 거부).
+is_netmask() {
+    local mask inverted
+    if ! is_ipv4 "${1-}"; then
+        return 1
+    fi
+    mask=$(ip_to_int "$1")
+    if [ "$mask" -eq 0 ] || [ "$mask" -eq 4294967295 ]; then
+        return 1
+    fi
+    inverted=$(( (~mask) & 4294967295 ))
+    if [ $(( inverted & (inverted + 1) )) -ne 0 ]; then
+        return 1
+    fi
+    return 0
+}
+
+# same_subnet <ip> <mask> <router>
+same_subnet() {
+    local address mask other
+    address=$(ip_to_int "$1")
+    mask=$(ip_to_int "$2")
+    other=$(ip_to_int "$3")
+    if [ $(( address & mask )) -eq $(( other & mask )) ]; then
+        return 0
+    fi
+    return 1
+}
+
+# --- 파일 안전성 ------------------------------------------------------------
+
+# 권한 비트가 **root 외의 사용자에게 쓰기를 열어 주는가**. 열려 있으면 0(참).
+#
+# group-write 도 world-write 와 똑같이 위험하다. 설정 값은 root 의 networksetup 인자가
+# 되므로, 그 그룹에 속한 아무 프로세스나 시스템 DNS·기본 게이트웨이를 갈아치울 수 있다.
+#
+# 판독할 수 없는 값(빈 문자열·비8진수)은 **위험한 쪽으로** 판정한다.
+# stat 가 실패했을 때 산술 오류로 검사를 통과해 버리는(fail open) 일이 없어야 한다.
+mode_allows_foreign_write() {
+    local perms="${1-}"
+    if [[ ! "$perms" =~ ^[0-7]{3,5}$ ]]; then
+        return 0
+    fi
+    if [ $(( 8#$perms & 8#0022 )) -ne 0 ]; then
+        return 0
+    fi
+    return 1
+}
+
+# root 소유이고 root 외에는 쓸 수 없는지 확인한다.
+# 심링크는 거부한다 — 교체 공격으로 엉뚱한 파일을 읽게 만드는 통로다.
+assert_root_owned() {
+    local path="$1" label="$2" owner perms
+    if [ -L "$path" ]; then
+        die "$EXIT_CONFIG" "$label 이 심볼릭 링크입니다: $path"
+    fi
+    if [ ! -e "$path" ]; then
+        die "$EXIT_CONFIG" "$label 이 없습니다: $path"
+    fi
+    owner=$(stat -f '%u' "$path") || die "$EXIT_CONFIG" "$label 정보를 읽지 못했습니다: $path"
+    if [[ ! "$owner" =~ ^[0-9]+$ ]]; then
+        die "$EXIT_CONFIG" "$label 의 소유자를 읽지 못했습니다: $path"
+    fi
+    if [ "$owner" -ne 0 ]; then
+        die "$EXIT_CONFIG" "$label 의 소유자가 root 가 아닙니다: $path (설치가 손상됐습니다)"
+    fi
+    perms=$(stat -f '%OLp' "$path") || die "$EXIT_CONFIG" "$label 의 권한을 읽지 못했습니다: $path"
+    if mode_allows_foreign_write "$perms"; then
+        die "$EXIT_CONFIG" "$label 을 root 외의 사용자가 쓸 수 있습니다: $path (권한 $perms — 설치가 손상됐습니다)"
+    fi
+}
+
+# 이 스크립트 자신이 안전하게 설치돼 있는지 확인한다. 아니면 실행하지 않는다(fail closed).
+assert_self_is_safe() {
+    local self="${BASH_SOURCE[0]}" directory
+    directory=$(dirname "$self")
+    assert_root_owned "$directory" "권한 스크립트 디렉터리"
+    assert_root_owned "$self" "권한 스크립트"
+}
+
+# --- 설정 읽기 --------------------------------------------------------------
+
+# 설정 파일을 **한 번만 열고**, 연 그 파일 자체를 검사한 뒤 root 만 들여다볼 수 있는
+# 사본으로 옮긴다. 이후의 모든 파싱은 사본에서만 한다.
+#
+# 왜 이렇게 하는가: 경로를 stat 로 한 번 검사하고 plutil 로 수십 번 다시 여는 방식은,
+# 검사와 사용 사이에 파일이 바뀔 수 있는 창을 수십 개 만든다(TOCTOU).
+# 여기서는 fd 를 먼저 잡고 `/dev/fd` 로 **그 fd** 를 검사하므로, 검사한 대상과 읽는 대상이
+# 같은 것임이 보장된다.
+#
+# macOS 의 `/dev/fd` 는 소유자·종류·크기는 실제 파일 값을 돌려주지만 권한 비트는 열기 모드로
+# 합성한다. 그래서 권한 검사만 경로 stat 로 따로 한다. root 소유가 아닌 파일은 이미 fd 검사에서
+# 걸리고, root 소유 파일의 권한을 바꿀 수 있는 것은 root 뿐이므로 이 조합으로 충분하다.
+CONFIG_SNAPSHOT=""
+CONFIG_SNAPSHOT_DIR=""
+
+remove_config_snapshot() {
+    if [ -n "$CONFIG_SNAPSHOT_DIR" ]; then
+        rm -rf -- "$CONFIG_SNAPSHOT_DIR"
+        CONFIG_SNAPSHOT_DIR=""
+    fi
+}
+
+open_config_snapshot() {
+    local source="$1" owner kind
+
+    CONFIG_SNAPSHOT_DIR=$(umask 077; mktemp -d -t exem-wifi-switcher-config) \
+        || die "$EXIT_CONFIG" "설정을 읽을 임시 자리를 만들지 못했습니다"
+    trap remove_config_snapshot EXIT
+    CONFIG_SNAPSHOT="$CONFIG_SNAPSHOT_DIR/config.json"
+
+    exec 9<"$source" || die "$EXIT_CONFIG" "설정 파일을 열지 못했습니다: $source"
+
+    owner=$(stat -f '%u' /dev/fd/9) || { exec 9<&-; die "$EXIT_CONFIG" "설정 파일 정보를 읽지 못했습니다"; }
+    kind=$(stat -f '%HT' /dev/fd/9) || { exec 9<&-; die "$EXIT_CONFIG" "설정 파일 정보를 읽지 못했습니다"; }
+    if [ "$kind" != "Regular File" ]; then
+        exec 9<&-
+        die "$EXIT_CONFIG" "설정 파일이 일반 파일이 아닙니다: $source ($kind)"
+    fi
+    if [[ ! "$owner" =~ ^[0-9]+$ ]] || [ "$owner" -ne 0 ]; then
+        exec 9<&-
+        die "$EXIT_CONFIG" "설정 파일의 소유자가 root 가 아닙니다: $source (설치가 손상됐습니다)"
+    fi
+
+    cat <&9 > "$CONFIG_SNAPSHOT" || { exec 9<&-; die "$EXIT_CONFIG" "설정 파일을 읽지 못했습니다: $source"; }
+    exec 9<&-
+
+    if [ ! -s "$CONFIG_SNAPSHOT" ]; then
+        die "$EXIT_CONFIG" "설정 파일이 비어 있습니다: $source"
+    fi
+}
+
+# plutil 로 JSON 값을 하나 읽는다. 셸이 아니라 파서가 값을 다루므로 따옴표·이스케이프 문제가 없다.
+# 키 경로에는 사용자 입력을 넣지 않는다 (항상 고정 키 + 정수 인덱스).
+#
+# 넘기는 파일은 **항상 root 전용 사본**이다 (원본 경로를 다시 열지 않는다).
+config_get() {
+    plutil -extract "$2" raw -o - -- "$1" 2>/dev/null
+}
+
+# 이름으로 프로필 인덱스를 찾는다.
+find_profile_index() {
+    local file="$1" target="$2" count index name
+    count=$(config_get "$file" profiles) || return 1
+    if [[ ! "$count" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    index=0
+    while [ "$index" -lt "$count" ]; do
+        name=$(config_get "$file" "profiles.$index.name") || name=""
+        if [ "$name" = "$target" ]; then
+            printf '%s' "$index"
+            return 0
+        fi
+        index=$(( index + 1 ))
+    done
+    return 1
+}
+
+# 프로필 값을 읽어 전역에 담는다. **읽은 값은 전부 다시 검증한다** —
+# 설정 파일이 어떤 경위로 바뀌었든, 검증을 통과하지 못한 값이 networksetup 에 닿지 않게 한다.
+#
+#   load_profile_values <설정파일> <인덱스> <프로필이름>
+#   → PROFILE_MODE / PROFILE_IP / PROFILE_SUBNET / PROFILE_ROUTER / PROFILE_DNS[]
+#
+# root 권한 없이도 호출할 수 있어 테스트에서 그대로 검증한다.
+PROFILE_MODE=""
+PROFILE_IP=""
+PROFILE_SUBNET=""
+PROFILE_ROUTER=""
+PROFILE_DNS=()
+
+load_profile_values() {
+    local file="$1" index="$2" label="$3"
+    local dns_count dns_index server
+
+    PROFILE_MODE=""
+    PROFILE_IP=""
+    PROFILE_SUBNET=""
+    PROFILE_ROUTER=""
+    PROFILE_DNS=()
+
+    PROFILE_MODE=$(config_get "$file" "profiles.$index.mode") || PROFILE_MODE=""
+    if [ -z "$PROFILE_MODE" ]; then
+        # mode 가 생략된 설정도 받아준다. 고정 IP 값이 있으면 manual 로 본다.
+        if config_get "$file" "profiles.$index.ip" >/dev/null; then
+            PROFILE_MODE="manual"
+        else
+            PROFILE_MODE="dhcp"
+        fi
+    fi
+
+    case "$PROFILE_MODE" in
+        manual)
+            PROFILE_IP=$(config_get "$file" "profiles.$index.ip") \
+                || die "$EXIT_CONFIG" "'$label' 프로필에 ip 값이 없습니다"
+            PROFILE_SUBNET=$(config_get "$file" "profiles.$index.subnet") \
+                || die "$EXIT_CONFIG" "'$label' 프로필에 subnet 값이 없습니다"
+            PROFILE_ROUTER=$(config_get "$file" "profiles.$index.router") \
+                || die "$EXIT_CONFIG" "'$label' 프로필에 router 값이 없습니다"
+
+            if ! is_ipv4 "$PROFILE_IP"; then
+                die "$EXIT_CONFIG" "'$label' 프로필의 ip 형식이 올바르지 않습니다"
+            fi
+            if ! is_netmask "$PROFILE_SUBNET"; then
+                die "$EXIT_CONFIG" "'$label' 프로필의 subnet 이 올바른 서브넷 마스크가 아닙니다"
+            fi
+            if ! is_ipv4 "$PROFILE_ROUTER"; then
+                die "$EXIT_CONFIG" "'$label' 프로필의 router 형식이 올바르지 않습니다"
+            fi
+            if ! same_subnet "$PROFILE_IP" "$PROFILE_SUBNET" "$PROFILE_ROUTER"; then
+                die "$EXIT_CONFIG" "'$label' 프로필의 라우터가 IP·서브넷이 이루는 대역 밖에 있습니다"
+            fi
+            ;;
+        dhcp)
+            # DHCP 프로필에 고정 IP 값이 남아 있으면 "적용된 줄 알았는데 아니었다" 를 만든다.
+            if config_get "$file" "profiles.$index.ip" >/dev/null; then
+                die "$EXIT_CONFIG" "'$label' 은 DHCP 프로필인데 ip 값이 들어 있습니다"
+            fi
+            ;;
+        *)
+            die "$EXIT_CONFIG" "알 수 없는 프로필 모드입니다: '$PROFILE_MODE' (manual 또는 dhcp)"
+            ;;
+    esac
+
+    dns_count=$(config_get "$file" "profiles.$index.dns") || dns_count=0
+    if [[ ! "$dns_count" =~ ^[0-9]+$ ]]; then
+        dns_count=0
+    fi
+    if [ "$dns_count" -gt 8 ]; then
+        die "$EXIT_CONFIG" "'$label' 프로필의 DNS 서버가 너무 많습니다 (최대 8개)"
+    fi
+    dns_index=0
+    while [ "$dns_index" -lt "$dns_count" ]; do
+        server=$(config_get "$file" "profiles.$index.dns.$dns_index") || server=""
+        if ! is_ipv4 "$server"; then
+            die "$EXIT_CONFIG" "'$label' 프로필의 DNS 서버 주소 형식이 올바르지 않습니다"
+        fi
+        PROFILE_DNS[$dns_index]="$server"
+        dns_index=$(( dns_index + 1 ))
+    done
+
+    # 고정 IP 프로필에 DNS 가 없으면 적용해서는 안 된다.
+    #
+    # DHCP 프로필이라면 목록이 비어도 된다 — DNS 를 지우면 DHCP 서버가 알려준 값을 쓰게 된다.
+    # 고정 IP 에는 알려줄 주체가 없다. 그대로 적용하면 resolver 가 0개가 되고 이름 해석이
+    # 통째로 끊긴다. 여기서 멈추면 네트워크는 손대기 전 그대로 남는다.
+    if [ "$PROFILE_MODE" = "manual" ] && [ ${#PROFILE_DNS[@]} -eq 0 ]; then
+        die "$EXIT_CONFIG" "'$label' 은 고정 IP 프로필인데 dns 가 비어 있습니다 (최소 1개 필요 — 비우면 이름 해석이 끊깁니다)"
+    fi
+    return 0
+}
+
+# --- 시스템 조회 ------------------------------------------------------------
+
+# 지금 걸려 있는 DNS 를 기억해 둔다. IPv4 적용이 실패했을 때 되돌리기 위한 것이다.
+#
+#   PREVIOUS_DNS[]     — 수동 지정돼 있던 서버 목록 (없으면 빈 배열)
+#   PREVIOUS_DNS_READ  — 1 이면 위 값이 믿을 만하다. 0 이면 되돌릴 근거가 없다
+PREVIOUS_DNS=()
+PREVIOUS_DNS_READ=0
+
+read_current_dns() {
+    local service="$1" output line
+    output=$(networksetup -getdnsservers "$service" 2>/dev/null) || return 1
+
+    PREVIOUS_DNS=()
+    # "There aren't any DNS Servers set on ..." 은 수동 지정이 없다는 뜻이다 (빈 목록이 정답).
+    case "$output" in
+        *"aren't any DNS Servers"*) return 0 ;;
+    esac
+    while IFS= read -r line; do
+        if is_ipv4 "$line"; then
+            PREVIOUS_DNS[${#PREVIOUS_DNS[@]}]="$line"
+        fi
+    done <<EOF
+$output
+EOF
+    return 0
+}
+
+# 기억해 둔 DNS 로 되돌린다. **항상 0 을 돌려주고**, 무슨 일이 있었는지 한 줄로 알린다
+# (되돌리기 실패가 원래의 실패 메시지를 덮어써서는 안 된다).
+restore_dns() {
+    local service="$1"
+    if [ "$PREVIOUS_DNS_READ" -ne 1 ]; then
+        printf '%s' "DNS 는 되돌리지 못했습니다 (이전 값을 읽어 두지 못했습니다)"
+        return 0
+    fi
+    if [ ${#PREVIOUS_DNS[@]} -gt 0 ]; then
+        if networksetup -setdnsservers "$service" "${PREVIOUS_DNS[@]}" >/dev/null 2>&1; then
+            printf '%s' "DNS 는 이전 값으로 되돌렸습니다"
+            return 0
+        fi
+    elif networksetup -setdnsservers "$service" "Empty" >/dev/null 2>&1; then
+        printf '%s' "DNS 는 이전 상태(수동 지정 없음)로 되돌렸습니다"
+        return 0
+    fi
+    printf '%s' "DNS 를 되돌리는 데에도 실패했습니다"
+    return 0
+}
+
+# 서비스 이름을 시스템이 실제로 알고 있는 목록과 대조한다.
+# 설정 파일의 문자열을 그대로 믿지 않고, 시스템 자신을 화이트리스트로 삼는다.
+service_exists() {
+    local target="$1" line
+    while IFS= read -r line; do
+        line="${line#\*}"
+        if [ "$line" = "$target" ]; then
+            return 0
+        fi
+    done <<EOF
+$(networksetup -listallnetworkservices 2>/dev/null)
+EOF
+    return 1
+}
+
+# --- 본체 ------------------------------------------------------------------
+
+main() {
+    if [ $# -eq 1 ] && { [ "$1" = "--help" ] || [ "$1" = "-h" ]; }; then
+        usage
+        return 0
+    fi
+
+    # 1) 인자 검증이 가장 먼저다. 여기까지는 아무것도 읽지도 바꾸지도 않는다.
+    if [ $# -ne 1 ]; then
+        usage >&2
+        die "$EXIT_USAGE" "인자는 프로필 이름 하나여야 합니다 (받은 인자 수: $#)"
+    fi
+    if ! validate_profile_name "$1"; then
+        die "$EXIT_USAGE" "허용되지 않는 프로필 이름입니다 (영문·숫자로 시작, 이후 영문·숫자·_·- 만, 최대 ${PROFILE_NAME_MAX_LENGTH}자)"
+    fi
+    local profile_name="$1"
+
+    # 2) 권한 확인
+    if [ "$(id -u)" -ne 0 ]; then
+        die "$EXIT_NOT_ROOT" "이 스크립트는 root 로 실행해야 합니다 (메뉴바 앱이 sudo -n 으로 호출합니다)"
+    fi
+
+    # 3) 설치 상태와 설정 파일이 신뢰할 수 있는지 확인하고, 내용을 한 번만 읽어 사본을 만든다.
+    #    이 뒤로는 원본 경로를 다시 열지 않는다.
+    assert_self_is_safe
+    assert_root_owned "$(dirname "$CONFIG_FILE")" "설정 디렉터리"
+    assert_root_owned "$CONFIG_FILE" "설정 파일"
+    open_config_snapshot "$CONFIG_FILE"
+
+    # 4) 네트워크 서비스 이름
+    local service
+    service=$(config_get "$CONFIG_SNAPSHOT" service) || die "$EXIT_CONFIG" "설정에 service 항목이 없습니다"
+    if [ -z "$service" ]; then
+        die "$EXIT_CONFIG" "설정의 service 항목이 비어 있습니다"
+    fi
+    if ! service_exists "$service"; then
+        die "$EXIT_CONFIG" "이 시스템에 없는 네트워크 서비스입니다: '$service'"
+    fi
+
+    # 5) 프로필 찾기
+    local index
+    index=$(find_profile_index "$CONFIG_SNAPSHOT" "$profile_name") \
+        || die "$EXIT_CONFIG" "설정에 없는 프로필입니다: '$profile_name'"
+
+    # 6) 프로필 값 읽기 + 재검증
+    load_profile_values "$CONFIG_SNAPSHOT" "$index" "$profile_name"
+
+    # 7) DNS 를 **먼저** 적용한다.
+    #
+    # 순서에 이유가 있다. IPv4 를 먼저 걸고 DNS 에서 실패하면 'IP 는 새 값, DNS 는 옛 값' 인
+    # 절반짜리 상태로 끝난다. 그 상태는 IP 만 보면 목표와 같아 보여서 다시 부를 계기가 없고,
+    # DNS 는 영영 고쳐지지 않는다. DNS 를 먼저 걸면 여기서 실패했을 때
+    # **아무것도 바꾸지 않은 상태**로 멈춘다 (fail closed).
+    #
+    # 목록이 있으면 그대로 지정한다.
+    # 비어 있는데 **DHCP 프로필**이면 명시적으로 비운다 — 그래야 DHCP 가 알려준 값을 쓴다.
+    # 고정 IP 프로필은 여기 오기 전에 이미 거부됐다(load_profile_values). 그래도 한 번 더 막는다:
+    # `Empty` 를 고정 IP 에 쓰면 resolver 가 0개가 되어 이름 해석이 끊긴다.
+    if read_current_dns "$service"; then
+        PREVIOUS_DNS_READ=1
+    else
+        PREVIOUS_DNS_READ=0
+    fi
+
+    if [ ${#PROFILE_DNS[@]} -gt 0 ]; then
+        if ! networksetup -setdnsservers "$service" "${PROFILE_DNS[@]}"; then
+            die "$EXIT_NETWORKSETUP" "DNS 서버 설정에 실패했습니다 ('$service'). 네트워크는 그대로 둡니다"
+        fi
+    elif [ "$PROFILE_MODE" = "dhcp" ]; then
+        if ! networksetup -setdnsservers "$service" "Empty"; then
+            die "$EXIT_NETWORKSETUP" "DNS 서버 초기화에 실패했습니다 ('$service'). 네트워크는 그대로 둡니다"
+        fi
+    else
+        die "$EXIT_CONFIG" "고정 IP 프로필의 DNS 가 비어 있어 DNS 를 건드리지 않았습니다 ('$profile_name')"
+    fi
+
+    # 8) IPv4 구성.
+    #
+    # 여기서 실패하면 방금 바꾼 DNS 를 되돌린다. 그대로 두면 '새 DNS + 옛 IP' 라는,
+    # 어느 쪽 프로필도 아닌 구성이 남는다 (사내 DNS 를 문 채 집 IP 로 도는 상태가 정확히 그것이다).
+    local rollback
+    case "$PROFILE_MODE" in
+        manual)
+            if ! networksetup -setmanual "$service" "$PROFILE_IP" "$PROFILE_SUBNET" "$PROFILE_ROUTER"; then
+                rollback=$(restore_dns "$service")
+                die "$EXIT_NETWORKSETUP" "고정 IP 적용에 실패했습니다 ('$service'). $rollback"
+            fi
+            ;;
+        dhcp)
+            if ! networksetup -setdhcp "$service"; then
+                rollback=$(restore_dns "$service")
+                die "$EXIT_NETWORKSETUP" "DHCP 전환에 실패했습니다 ('$service'). $rollback"
+            fi
+            ;;
+    esac
+
+    printf "'%s' 프로필을 %s 에 적용했습니다 (%s)\n" "$profile_name" "$service" "$PROFILE_MODE"
+    return 0
+}
+
+# 테스트에서 이 파일을 source 해 개별 검증 함수를 직접 호출한다.
+# 그때는 main 이 돌지 않으므로 시스템을 건드리지 않는다.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    set -euo pipefail
+    IFS=$' \t\n'
+    main "$@"
+fi
