@@ -1,0 +1,318 @@
+import Foundation
+
+/// `AppConfig.inspect` 가 돌려주는 설정 파일 상태. 짧은 이름으로도 쓴다.
+public typealias ConfigStatus = AppConfig.Status
+
+/// 메뉴바 아이콘 3종. 파일 이름·SF Symbols 이름과 1:1 로 이어진다.
+public enum MenuBarIcon: String, Equatable, Sendable {
+    /// 고정 IP 프로필이 적용돼 있다
+    case manual
+    /// DHCP 로 돌고 있다
+    case dhcp
+    /// 손을 봐야 하는 상태 (미설치·설정 문제·전환 실패)
+    case error
+}
+
+/// 앱이 지금 하고 있는 일. 관측된 상태보다 우선한다.
+public enum ActionState: Equatable, Sendable {
+    case idle
+    case switching(profile: String)
+    case failed(profile: String, message: String)
+}
+
+/// 상태 판정에 들어가는 관측값 전부. 시스템 호출은 이 구조체를 채우는 쪽에 있다.
+public struct StatusInput: Equatable, Sendable {
+    public var config: ConfigStatus
+    /// 현재 IPv4 구성. 읽지 못했으면 nil.
+    public var interface: InterfaceInfo?
+    /// 읽지 못한 이유. 조용히 삼키지 않기 위해 함께 들고 다닌다.
+    public var interfaceError: String?
+    /// 권한 스크립트(`apply`)가 설치돼 있는가.
+    public var helperInstalled: Bool
+    public var action: ActionState
+    /// 자동 전환이 켜져 있는가.
+    public var autoSwitchEnabled: Bool
+    /// 마지막으로 읽은 Wi-Fi 이름. 아직 읽지 않았으면 nil.
+    public var ssid: SSIDReading?
+    /// 마지막 판정이 전환을 하지 않기로 한 이유. 메뉴에 한 줄로 남긴다.
+    public var autoSwitchHold: AutoSwitchHold?
+    /// 알림을 보낼 수 있는 상태인가. 막혀 있으면 메뉴가 유일한 통로가 되므로 그 사실을 적는다.
+    public var notifications: NotificationPermission
+
+    public init(
+        config: ConfigStatus,
+        interface: InterfaceInfo? = nil,
+        interfaceError: String? = nil,
+        helperInstalled: Bool = true,
+        action: ActionState = .idle,
+        autoSwitchEnabled: Bool = false,
+        ssid: SSIDReading? = nil,
+        autoSwitchHold: AutoSwitchHold? = nil,
+        notifications: NotificationPermission = .allowed
+    ) {
+        self.config = config
+        self.interface = interface
+        self.interfaceError = interfaceError
+        self.helperInstalled = helperInstalled
+        self.action = action
+        self.autoSwitchEnabled = autoSwitchEnabled
+        self.ssid = ssid
+        self.autoSwitchHold = autoSwitchHold
+        self.notifications = notifications
+    }
+}
+
+/// 메뉴바가 그릴 것 전부. 여기까지 오면 AppKit 쪽에는 판단이 남아 있지 않다.
+public struct StatusModel: Equatable, Sendable {
+
+    /// 메뉴바 아이콘
+    public let icon: MenuBarIcon
+    /// 메뉴 첫 줄
+    public let headline: String
+    /// 머리말만으로 부족할 때의 둘째 줄. 실패 이유·해결 방법이 여기 들어간다.
+    public let detail: String?
+    /// 목록에 보여줄 프로필. 설정을 못 읽으면 비어 있다.
+    public let profiles: [NetworkProfile]
+    /// 현재 구성과 일치하는 프로필 이름 (체크 표시)
+    public let activeProfileName: String?
+    /// 프로필을 눌러 전환할 수 있는 상태인가
+    public let canSwitch: Bool
+    /// 온보딩을 띄워야 하는 상태인가
+    public let needsSetup: Bool
+
+    // 아래 세 값은 자동 전환(Phase 3)의 표시다. 위의 값들이 "지금 어떤 구성인가" 를 말한다면
+    // 이 값들은 "누가 그렇게 만들고 있는가" 를 말한다.
+
+    /// 자동 전환 토글의 상태
+    public private(set) var autoSwitchEnabled: Bool = false
+    /// 토글 아래 한 줄. 지금 무엇을 보고 있고 왜 멈춰 있는지를 적는다. 없으면 nil.
+    public private(set) var autoSwitchNote: String?
+    /// 위치 권한을 열어달라는 항목을 보여야 하는가
+    public private(set) var needsLocationPermission: Bool = false
+    /// 자동 전환이 실패로 쉬거나 멈춰 있어, 지금 다시 시도할 손잡이를 내놓아야 하는가.
+    ///
+    /// 백오프·중단은 원래 **Wi-Fi 가 바뀌어야** 풀린다. 같은 자리에서 원인을 고친 사용자에게는
+    /// 앱을 다시 띄우는 것 말고 길이 없다 — 그 막다른 골목을 여는 문이다.
+    public private(set) var canRetryAutoSwitch: Bool = false
+    /// 알림이 막혀 있다는 한 줄. 막히지 않았으면 nil.
+    public private(set) var notificationNote: String?
+    /// 알림 설정을 열어달라는 항목을 보여야 하는가
+    public private(set) var needsNotificationPermission: Bool = false
+
+    public static func resolve(_ input: StatusInput) -> StatusModel {
+        var model = resolveNetworkState(input)
+        model.autoSwitchEnabled = input.autoSwitchEnabled
+        model.autoSwitchNote = autoSwitchNote(input, profiles: model.profiles)
+        model.needsLocationPermission = input.autoSwitchEnabled && (input.ssid?.isPermissionProblem ?? false)
+        model.canRetryAutoSwitch = input.autoSwitchEnabled && isStalled(input.autoSwitchHold)
+        model.needsNotificationPermission = input.autoSwitchEnabled && input.notifications == .denied
+        model.notificationNote = model.needsNotificationPermission
+            ? "알림이 꺼져 있어 전환 사실을 알리지 못합니다 — 이 메뉴에만 남습니다"
+            : nil
+        return model
+    }
+
+    /// 자동 전환이 스스로 빠져나오지 못하는 상태인가.
+    ///
+    /// `ineffective` 도 포함한다. 적용은 되는데 구성이 따라오지 않는 상황은 사용자가 밖에서
+    /// 손을 본 뒤(다른 도구 종료·시스템 설정 정리) 다시 눌러 볼 만한 자리다.
+    private static func isStalled(_ hold: AutoSwitchHold?) -> Bool {
+        switch hold {
+        case .backoff?, .givenUp?, .ineffective?: return true
+        default: return false
+        }
+    }
+
+    private static func resolveNetworkState(_ input: StatusInput) -> StatusModel {
+        let profiles: [NetworkProfile]
+        if case .ready(let config) = input.config { profiles = config.profiles } else { profiles = [] }
+
+        let active = activeProfile(config: input.config, interface: input.interface)
+        let observedIcon = icon(for: input.interface, active: active)
+
+        // 1) 진행 중이거나 방금 실패한 동작이 가장 먼저다.
+        switch input.action {
+        case .switching(let profile):
+            return StatusModel(
+                icon: observedIcon,
+                headline: "\(displayName(of: profile, in: profiles)) 로 전환 중…",
+                detail: nil,
+                profiles: profiles,
+                activeProfileName: active?.name,
+                canSwitch: false,
+                needsSetup: false
+            )
+        case .failed(let profile, let message):
+            return StatusModel(
+                icon: .error,
+                headline: "전환 실패 — \(displayName(of: profile, in: profiles))",
+                detail: message,
+                profiles: profiles,
+                activeProfileName: active?.name,
+                canSwitch: true,
+                needsSetup: false
+            )
+        case .idle:
+            break
+        }
+
+        // 2) 설정이 없거나 못 쓰면 전환할 대상 자체가 없다.
+        switch input.config {
+        case .missing:
+            return StatusModel(
+                icon: .error, headline: "설정이 필요합니다",
+                detail: "설정 창에서 사내 고정 IP 값을 등록하세요.",
+                profiles: [], activeProfileName: nil, canSwitch: false, needsSetup: true
+            )
+        case .pristineExample:
+            return StatusModel(
+                icon: .error, headline: "설정이 필요합니다",
+                detail: "아직 예시 설정 그대로입니다. 설정 창에서 실제 값을 등록하세요.",
+                profiles: [], activeProfileName: nil, canSwitch: false, needsSetup: true
+            )
+        case .unusable(_, let reason):
+            return StatusModel(
+                icon: .error, headline: "설정 파일에 문제가 있습니다",
+                detail: reason,
+                profiles: [], activeProfileName: nil, canSwitch: false, needsSetup: false
+            )
+        case .ready:
+            break
+        }
+
+        // 3) 권한 스크립트가 없으면 눌러도 실패한다. 누르기 전에 알린다.
+        guard input.helperInstalled else {
+            return StatusModel(
+                icon: .error,
+                headline: "설치가 필요합니다",
+                detail: "터미널에서 ./scripts/install.sh 를 실행하면 전환할 수 있습니다.",
+                profiles: profiles,
+                activeProfileName: active?.name,
+                canSwitch: false,
+                needsSetup: false
+            )
+        }
+
+        // 4) 현재 구성을 읽지 못한 경우. 전환 자체는 막지 않는다.
+        guard let interface = input.interface else {
+            return StatusModel(
+                icon: .error,
+                headline: "현재 상태를 읽지 못했습니다",
+                detail: input.interfaceError,
+                profiles: profiles,
+                activeProfileName: nil,
+                canSwitch: true,
+                needsSetup: false
+            )
+        }
+
+        // 5) 정상 경로
+        if let active {
+            return StatusModel(
+                icon: observedIcon,
+                headline: "\(active.displayName) 적용 중",
+                detail: summary(of: interface),
+                profiles: profiles,
+                activeProfileName: active.name,
+                canSwitch: true,
+                needsSetup: false
+            )
+        }
+        return StatusModel(
+            icon: observedIcon,
+            headline: "프로필 없음 — \(methodText(interface.configMethod))",
+            detail: summary(of: interface),
+            profiles: profiles,
+            activeProfileName: nil,
+            canSwitch: true,
+            needsSetup: false
+        )
+    }
+
+    // MARK: - 자동 전환 표시
+
+    /// 자동 전환 토글 아래에 붙는 한 줄.
+    ///
+    /// 자동 전환은 눈에 보이지 않게 일한다. 그래서 **아무 일도 하지 않고 있을 때 그 이유**를
+    /// 적는 것이 이 함수의 존재 이유다. 켜져 있는데 조용하면 사용자는 고장과 구분할 수 없다.
+    private static func autoSwitchNote(_ input: StatusInput, profiles: [NetworkProfile]) -> String? {
+        guard input.autoSwitchEnabled else { return nil }
+
+        func label(_ name: String) -> String { displayName(of: name, in: profiles) }
+
+        switch input.autoSwitchHold {
+        case .none, .busy?, .alreadyApplied?, .settling?:
+            // 평소 상태. 무엇을 보고 있는지만 알려준다.
+            return input.ssid?.statusText
+        case .disabled?:
+            return nil
+        case .locationPermissionRequired?, .locationPermissionDenied?, .wifiOff?, .notAssociated?:
+            return input.ssid?.statusText
+        case .ssidUnavailable(let reason)?:
+            return input.ssid?.statusText ?? "Wi-Fi 이름을 읽지 못했습니다 — \(reason)"
+        case .configUnavailable?:
+            return "설정을 마치면 자동으로 전환합니다"
+        case .helperNotInstalled?:
+            return "전환 권한을 설치하면 자동으로 전환합니다"
+        case .noMatchingProfile(let ssid)?:
+            return "Wi-Fi \(ssid) 에 해당하는 프로필이 없습니다"
+        case .manualOverride(let profile)?:
+            return "\(label(profile)) 수동 선택 유지 중 — Wi-Fi 가 바뀌면 자동으로 돌아갑니다"
+        case .ineffective(let profile)?:
+            return "\(label(profile)) 를 적용했지만 구성이 바뀌지 않았습니다"
+        case .backoff(let profile, let retryAt)?:
+            return "\(label(profile)) 전환에 실패해 \(clockText(retryAt)) 에 다시 시도합니다"
+        case .givenUp(let profile, let failures)?:
+            return "\(label(profile)) 전환이 \(failures)회 실패해 멈췄습니다 — Wi-Fi 가 바뀌면 다시 시도합니다"
+        }
+    }
+
+    private static let clockFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .medium
+        formatter.dateStyle = .none
+        return formatter
+    }()
+
+    private static func clockText(_ date: Date) -> String {
+        clockFormatter.string(from: date)
+    }
+
+    // MARK: - 조각
+
+    private static func activeProfile(config: ConfigStatus, interface: InterfaceInfo?) -> NetworkProfile? {
+        guard case .ready(let config) = config, let interface else { return nil }
+        return config.profiles.first { interface.conforms(to: $0) }
+    }
+
+    private static func icon(for interface: InterfaceInfo?, active: NetworkProfile?) -> MenuBarIcon {
+        if let active { return active.mode == .manual ? .manual : .dhcp }
+        guard let interface else { return .error }
+        switch interface.configMethod {
+        case .manual, .manualWithDHCPRouter: return .manual
+        case .dhcp, .bootp: return .dhcp
+        case .unknown: return .error
+        }
+    }
+
+    private static func displayName(of profileName: String, in profiles: [NetworkProfile]) -> String {
+        profiles.first { $0.name == profileName }?.displayName ?? profileName
+    }
+
+    private static func methodText(_ method: IPv4ConfigMethod) -> String {
+        switch method {
+        case .manual: return "고정 IP"
+        case .dhcp: return "DHCP"
+        case .manualWithDHCPRouter: return "고정 IP + DHCP 라우터"
+        case .bootp: return "BOOTP"
+        case .unknown(let raw): return raw
+        }
+    }
+
+    /// 둘째 줄에 쓰는 현재 값 요약. 자기 기기의 값이므로 그대로 보여준다.
+    private static func summary(of interface: InterfaceInfo) -> String? {
+        guard let ip = interface.ip else { return "IP 주소 없음" }
+        guard let router = interface.router else { return ip.description }
+        return "\(ip) → \(router)"
+    }
+}
