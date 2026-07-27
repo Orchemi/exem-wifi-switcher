@@ -1,0 +1,42 @@
+{
+  "_readme": [
+    "이 파일은 예시입니다. 실제 설정은 /usr/local/etc/exem-wifi-switcher/config.json 에 있습니다.",
+    "설치된 설정 파일은 root:wheel 0644 입니다. 앱에서 저장할 때 관리자 인증을 한 번 받습니다.",
+    "터미널에서 직접 고치려면: sudo nano /usr/local/etc/exem-wifi-switcher/config.json",
+    "여기 적힌 주소는 전부 문서용 예약 대역(RFC 5737, 192.0.2.0/24)이며 실제 네트워크 값이 아닙니다.",
+    "실제 사내 IP·라우터 주소를 이 파일에 적어 커밋하지 마세요 (RULES.md 참고).",
+    "",
+    "service        : networksetup 이 쓰는 네트워크 서비스 이름. 보통 'Wi-Fi'.",
+    "defaultProfile : 어떤 SSID 에도 걸리지 않을 때 적용할 프로필 이름.",
+    "profiles[].name   : 영문·숫자로 시작, 이후 영문·숫자·_·- 만, 최대 16자.",
+    "profiles[].mode   : 'manual'(고정 IP) 또는 'dhcp'(자동).",
+    "profiles[].ip     : mode 가 manual 일 때만. 서브넷 안의 호스트 주소.",
+    "profiles[].subnet : 255.255.255.0 처럼 1비트가 앞쪽에 연속된 마스크.",
+    "profiles[].router : ip 와 같은 대역에 있어야 합니다.",
+    "profiles[].dns    : IPv4 DNS 서버 목록, 최대 8개.",
+    "                    mode 가 manual 이면 최소 1개가 필요합니다 — 비우면 이름 해석이 끊깁니다.",
+    "                    mode 가 dhcp 면 비워 둡니다. DHCP 가 알려준 값을 씁니다.",
+    "profiles[].ssids  : 이 프로필로 전환할 Wi-Fi 이름 목록. 여기 적힌 Wi-Fi 에 접속하면 자동으로 이 프로필이 적용됩니다.",
+    "                    어느 목록에도 없는 Wi-Fi 에서는 defaultProfile 이 적용됩니다."
+  ],
+  "version": 1,
+  "service": "Wi-Fi",
+  "defaultProfile": "auto",
+  "profiles": [
+    {
+      "name": "office",
+      "mode": "manual",
+      "ip": "192.0.2.10",
+      "subnet": "255.255.255.0",
+      "router": "192.0.2.1",
+      "dns": ["192.0.2.53"],
+      "ssids": ["YOUR-OFFICE-SSID"]
+    },
+    {
+      "name": "auto",
+      "mode": "dhcp",
+      "dns": [],
+      "ssids": []
+    }
+  ]
+}
