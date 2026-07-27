@@ -1,0 +1,18 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+
+# 사용자 설정 — 실제 네트워크 값이 들어간다. 절대 커밋하지 않는다 (RULES.md §1-1)
+config.json
+
+# 번들 조립 산출물 (Phase 2)
+dist/
+*.app/
+
+# macOS
+.DS_Store
+
+# 로컬 실행 산출물
+*.log
