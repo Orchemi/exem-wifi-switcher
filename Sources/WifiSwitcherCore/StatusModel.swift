@@ -97,7 +97,10 @@ public struct StatusModel: Equatable, Sendable {
     public let icon: MenuBarIcon
     /// 메뉴 첫 줄. 지금이 어떤 상태인가를 한 마디로.
     public let headline: String
-    /// 머리말에 딸린 보조 줄. 현재 값 · 무엇이 비었는지 · 실패 이유가 온다.
+    /// 머리말에 딸린 보조 줄. 현재 값 · 실패 이유 · 원인이 온다.
+    ///
+    /// **머리말이 이미 말한 것은 여기 오지 않는다.** 같은 말을 크기만 줄여 한 번 더 적으면
+    /// 줄만 늘고 읽을 것은 늘지 않는다. 덧붙일 것이 없으면 `nil` 로 두고 줄을 만들지 않는다.
     public let detail: String?
     /// 목록에 보여줄 프로필. 설정을 못 읽으면 비어 있다.
     public let profiles: [NetworkProfile]
@@ -193,14 +196,18 @@ public struct StatusModel: Equatable, Sendable {
         // 절차는 여기 적지 않는다 — 어떻게 등록하는지는 그 문을 열면 나오는 설정 창이 말한다.
         switch input.config {
         case .missing:
+            // 딸린 줄이 없다. 설정 파일이 아예 없는 것은 **머리말이 이미 말한 그 상태**이고,
+            // 그 위에 '사내 IP 미등록' 을 덧붙여도 같은 말을 두 번 하는 것뿐이다.
+            // 보조 줄은 머리말이 말하지 않은 것이 있을 때만 붙인다.
             return StatusModel(
                 icon: .error, headline: "초기 설정하기",
-                detail: "사내 IP 미등록",
+                detail: nil,
                 profiles: [], activeProfileName: nil, canSwitch: false, needsSetup: true
             )
         case .pristineExample:
             // 값이 없는 것과 예시가 그대로 남은 것은 사용자가 할 일이 같아도 **원인이 다르다.**
-            // 할 일은 머리말이 말하므로, 딸린 줄에는 그 다른 원인만 남긴다.
+            // 이쪽은 파일이 있는데도 설정이 안 된 상태라, 머리말만 보면 왜인지 알 수 없다 —
+            // 머리말이 말하지 않는 그 원인 하나만 딸린 줄로 남긴다.
             return StatusModel(
                 icon: .error, headline: "초기 설정하기",
                 detail: "예시 설정 그대로",

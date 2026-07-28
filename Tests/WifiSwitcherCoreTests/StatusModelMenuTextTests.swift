@@ -191,8 +191,8 @@ struct StatusModelMenuTextTests {
             autoSwitchHold: .configUnavailable
         ))
         #expect(unset.headline == "초기 설정하기")
-        // 무엇이 비었는지는 머리말에 딸린 보조 줄이 말한다.
-        #expect(unset.detail == "사내 IP 미등록")
+        // 머리말이 이미 말한 상태를 보조 줄로 되풀이하지 않는다.
+        #expect(unset.detail == nil)
         #expect(unset.autoSwitchNotes.isEmpty)
 
         let noHelper = StatusModel.resolve(StatusInput(
