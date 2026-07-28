@@ -35,6 +35,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let ssidField = SettingsWindowController.makeField(
         placeholder: "비우면 자동 전환 안 함"
     )
+    /// 지금 접속한 사내 Wi-Fi 를 **목록에 더하는** 버튼.
+    ///
+    /// 사내 Wi-Fi 가 하나뿐이라는 보장이 없다(예: 일반망과 게스트망). 칸을 잠그기만 하면
+    /// 처음 설정한 하나만 등록되고 나머지에서는 자동 전환이 걸리지 않는다. 그 자리를 여는 길이다.
+    ///
+    /// **지금 고정 IP 로 붙어 있을 때만** 나타난다 — 지금 이름이 사내라는 근거가 그것뿐이다.
+    /// (집·카페에서 이 버튼이 보이면 그 이름을 사내로 등록해 그 자리에서 고정 IP 가 걸린다)
+    private let ssidAddButton = NSButton(title: "지금 Wi-Fi 추가", target: nil, action: nil)
+    /// 잠긴 칸을 여는 버튼. 오타 정리·사외에서의 직접 입력을 위한 길이다.
+    private let ssidEditButton = NSButton(title: "수정", target: nil, action: nil)
     /// 이 칸을 **채울 수 있게 만드는** 버튼. 위치 권한이 없으면 나타난다.
     ///
     /// 예전에는 이 자리에 "권한이 없어 읽지 못했습니다… 직접 입력해도 됩니다" 라는 안내가 붙었다.
@@ -45,6 +55,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private var errorLabels: [DraftField: NSTextField] = [:]
     private var errorRows: [DraftField: NSGridRow] = [:]
+    /// 네트워크 서비스 줄. **평소에는 숨어 있다** — 이 도구는 Wi-Fi 이름으로 판단하므로
+    /// 고를 이유가 없다. Wi-Fi 서비스를 못 찾은 기기에서만 드러난다.
+    private var serviceRow: NSGridRow?
+    /// Wi-Fi 이름 칸이 지금 편집 가능한가. **등록된 이름이 있으면 잠근다** —
+    /// 자동으로 채워진 이름을 실수로 고치면 자동 전환이 조용히 걸리지 않는다.
+    /// 비어 있으면 잠그지 않는다 (사외에서 설정하는 사람이 손으로 넣을 자리가 있어야 한다).
+    private var isSSIDEditable = true
+    /// Wi-Fi 서비스를 못 찾았을 때만 남는 안내. 저장 실패 문구와 같은 줄을 쓰므로
+    /// 상태로 들고 있다가 그 문구를 지울 때 되돌린다.
+    private var serviceNotice: String?
 
     private let loginItemCheckbox = NSButton(checkboxWithTitle: "로그인 시 자동 실행", target: nil, action: nil)
     /// 로그인 항목 화면으로 가는 손잡이. macOS 가 이 항목을 껐는지 확인하고 되돌릴 수 있는 유일한 자리다.
@@ -156,7 +176,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         servicePopUp.removeAllItems()
         servicePopUp.addItems(withTitles: services)
         let currentService = observation.readyConfig?.service ?? SystemProbe.preferredService(among: services)
-        if services.contains(currentService) { servicePopUp.selectItem(withTitle: currentService) }
+        let serviceFound = services.contains(currentService)
+        if serviceFound { servicePopUp.selectItem(withTitle: currentService) }
+        // 이 도구는 Wi-Fi 이름으로 판단한다 — 서비스를 고를 이유가 없으므로 평소에는 감춘다.
+        // 다만 그 서비스를 못 찾은 기기에서까지 감추면 손쓸 방법이 사라지므로 그때만 드러낸다.
+        serviceRow?.isHidden = serviceFound
 
         // 값 — 이미 저장된 프로필이 있으면 그 값을, 없으면 현재 구성에서 제안한다.
         let existingOffice = observation.readyConfig?.profiles.first { $0.mode == .manual }
@@ -193,8 +217,73 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         // 설치 안내와 '저장할 때 인증을 받는다' 는 이제 아래 권한 섹션이 말한다.
         // 같은 말을 두 자리에서 하면 어느 쪽이 최신인지 알 수 없게 된다.
+        // 등록된 이름이 있으면 잠근다. 창을 다시 열면 다시 잠긴다 — 잠금이 한 번 풀린 채로
+        // 남아 있으면 잠근 이유(실수로 고쳐지는 것)가 그대로 살아난다.
+        isSSIDEditable = ssidField.stringValue.isEmpty
+        applySSIDLock()
+
+        serviceNotice = serviceFound ? nil : "Wi-Fi 서비스 없음 · 위에서 사용할 서비스 선택"
+
         clearIssues()
         showDNSReadFailureIfNeeded()
+    }
+
+    /// 잠금 상태를 칸·버튼·안내 줄에 한 번에 반영한다.
+    ///
+    /// **잠겼다는 것이 보여야 한다.** 눌러도 아무 일 없는 칸처럼 보이면 고장으로 읽힌다 —
+    /// 비활성 색으로 칠하고, 여는 손잡이를 옆에 둔다.
+    private func applySSIDLock() {
+        ssidField.isEditable = isSSIDEditable
+        ssidField.isSelectable = true
+        ssidField.textColor = isSSIDEditable ? .labelColor : .secondaryLabelColor
+        // 이름이 여럿이면 잠긴 칸에서 잘린다. 잘린 뒷부분을 볼 자리를 남긴다.
+        ssidField.toolTip = isSSIDEditable ? nil : ssidField.stringValue
+        ssidEditButton.isHidden = isSSIDEditable
+        renderSSIDAddButton()
+        showSSIDLockHint()
+    }
+
+    /// 지금 붙어 있는 Wi-Fi 를 더할 수 있는 자리인가.
+    ///
+    /// 셋을 다 만족할 때만 내놓는다 — 이름이 읽히고, **지금 고정 IP 로 붙어 있고**(사내라는 근거),
+    /// 그 이름이 아직 목록에 없다. 사외에서는 나타나지 않는다.
+    private func renderSSIDAddButton() {
+        guard let ssid = observation.ssid.name,
+              observation.interface?.isManual == true,
+              !draft.ssidList.contains(ssid)
+        else {
+            ssidAddButton.isHidden = true
+            ssidAddButton.toolTip = nil
+            return
+        }
+        ssidAddButton.isHidden = false
+        ssidAddButton.toolTip = "'\(ssid)' 를 사내 Wi-Fi 목록에 더합니다"
+    }
+
+    /// 왜 잠겼는지 한 줄. 오류 줄과 자리를 나눠 쓴다 — 둘이 함께 필요한 순간이 없다.
+    private func showSSIDLockHint() {
+        guard let label = errorLabels[.ssids], let row = errorRows[.ssids] else { return }
+        guard !isSSIDEditable else {
+            row.isHidden = true
+            return
+        }
+        label.textColor = .secondaryLabelColor
+        label.stringValue = "자동 입력 · 오타 방지 잠금"
+        row.isHidden = false
+    }
+
+    @objc private func unlockSSIDField() {
+        isSSIDEditable = true
+        applySSIDLock()
+        window?.makeFirstResponder(ssidField)
+        window?.setContentSize(window?.contentView?.fittingSize ?? NSSize(width: Self.windowWidth, height: 320))
+    }
+
+    /// 지금 붙어 있는 Wi-Fi 이름을 목록 끝에 더한다. **손으로 적지 않으므로 오타가 없다.**
+    @objc private func addCurrentSSID() {
+        guard let ssid = observation.ssid.name, !draft.ssidList.contains(ssid) else { return }
+        ssidField.stringValue = (draft.ssidList + [ssid]).joined(separator: ", ")
+        applySSIDLock()
     }
 
     /// 창이 열려 있는 동안 새 관측이 왔을 때 화면을 맞춘다.
@@ -653,9 +742,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             label.stringValue = ""
             errorRows[field]?.isHidden = true
         }
-        // 안내 줄은 칸으로 좁힐 수 없는 문제가 있을 때만 나타난다.
-        noticeLabel.stringValue = ""
-        noticeLabel.isHidden = true
+        // 두 안내 줄 모두 오류와 자리를 나눠 쓴다 — 오류를 지웠으면 그 자리로 돌아온다.
+        noticeLabel.stringValue = serviceNotice ?? ""
+        noticeLabel.isHidden = serviceNotice == nil
+        showSSIDLockHint()
     }
 
     private func fieldControl(for field: DraftField) -> NSTextField? {
@@ -678,7 +768,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         grid.rowSpacing = 8
         grid.rowAlignment = .firstBaseline
 
-        addRow(to: grid, title: "네트워크 서비스", control: servicePopUp, field: nil)
+        serviceRow = addRow(to: grid, title: "네트워크 서비스", control: servicePopUp, field: nil)
         // 아래 값들이 **언제** 적용되는지를 먼저 정한다. 순서에 뜻이 있다 — 조건이 위, 그 조건에서 쓸 값이 아래.
         addRow(to: grid, title: "사내 Wi-Fi 이름", control: makeSSIDRow(), field: .ssids)
         addRow(to: grid, title: "IP 주소", control: ipField, field: .ip)
@@ -840,7 +930,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         ssidPermissionButton.setContentHuggingPriority(.required, for: .horizontal)
         ssidPermissionButton.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let row = NSStackView(views: [ssidField, ssidPermissionButton])
+        for button in [ssidAddButton, ssidEditButton] {
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            button.target = self
+            button.isHidden = true
+            button.setContentHuggingPriority(.required, for: .horizontal)
+            button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
+        ssidAddButton.action = #selector(addCurrentSSID)
+        ssidEditButton.action = #selector(unlockSSIDField)
+
+        let row = NSStackView(views: [ssidField, ssidPermissionButton, ssidAddButton, ssidEditButton])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.distribution = .fill
