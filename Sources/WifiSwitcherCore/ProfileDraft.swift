@@ -57,6 +57,16 @@ public struct ManualProfileDraft: Equatable, Sendable {
         )
     }
 
+    /// 칸이 전부 비어 있는가. **형식은 보지 않는다** — 무엇이든 적혀 있는지만 본다.
+    ///
+    /// 설정 창 머리말이 이것으로 갈린다: 값이 하나라도 있으면 '아직 저장 안 됨' 을 말해야 하고,
+    /// 하나도 없으면 아직 채울 것이 없다는 안내를 해야 한다.
+    public var isEmpty: Bool {
+        [ip, subnet, router, dns, ssids].allSatisfy {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
     /// 저장할 Wi-Fi 이름 목록. 쉼표로 끊고 앞뒤 공백만 턴다.
     ///
     /// **공백으로 끊지 않는다** — SSID 에는 공백이 들어갈 수 있어서(`OFFICE WIFI`)

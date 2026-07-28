@@ -51,7 +51,10 @@ public enum SetupGap: Equatable, Sendable {
             // 설정 파일이 아예 없는 것은 **머리말이 이미 말한 그 상태**다. 아무것도 시작되지
             // 않았다는 사실을 크기만 줄여 한 번 더 적으면 줄만 늘고 읽을 것은 늘지 않는다.
             return nil
-        case .exampleProfiles: return "예시 설정 그대로"
+        // '예시 설정 그대로' 라고 적었었다. 그것은 **설치 스크립트 쪽 사정**이지 사용자가 아는
+        // 말이 아니다 — 실기에서 이 줄을 보고도 무엇을 해야 하는지 읽히지 않았다(값은 다 차
+        // 있었고, 저장을 누른 적이 없었다). 남은 일을 그대로 적는다.
+        case .exampleProfiles: return "아직 저장 안 됨"
         case .wifiNames: return "사내 Wi-Fi 이름 미설정"
         }
     }

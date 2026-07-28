@@ -227,7 +227,13 @@ struct StatusModelMenuTextTests {
     func distinguishesUnsetCauses() {
         let pristine = StatusModel.resolve(StatusInput(config: .pristineExample(path: "/tmp/x.json")))
         #expect(pristine.headline == "초기 설정하기")
-        #expect(pristine.detail == "예시 설정 그대로")
+        // 사용자가 겪는 사실로 적는다 — '예시 파일' 은 설치 스크립트 쪽 사정이라
+        // 설정 창이 값을 채워 놓은 화면과 함께 놓으면 무슨 말인지 읽히지 않았다.
+        #expect(pristine.detail == "아직 저장 안 됨")
+
+        // 파일이 아예 없는 것은 머리말이 이미 말한 상태다. 딸린 줄을 붙이지 않는다.
+        let missing = StatusModel.resolve(StatusInput(config: .missing(path: "/tmp/none.json")))
+        #expect(missing.detail == nil)
     }
 
     /// 메뉴 첫 줄은 눌러서 설정 창을 여는 자리다(`MenuStyle.headline`). 설정이 아직 없는 상태에서

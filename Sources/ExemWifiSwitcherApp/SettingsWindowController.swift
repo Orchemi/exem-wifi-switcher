@@ -183,47 +183,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         serviceRow?.isHidden = serviceFound
 
         // 값 — 이미 저장된 프로필이 있으면 그 값을, 없으면 현재 구성에서 제안한다.
-        let existingOffice = observation.readyConfig?.profiles.first { $0.mode == .manual }
-        let suggestion = observation.interface.flatMap {
-            ManualProfileDraft.from($0, dns: observation.dnsServers, ssid: observation.ssid)
-        }
-
-        if let existingOffice, let ip = existingOffice.ip, let subnet = existingOffice.subnet, let router = existingOffice.router {
+        //
+        // **저장된 값과 지금 구성을 읽어 채운 값은 화면에서 같아 보인다.** 사내에서 창을 열면
+        // 다섯 칸이 저절로 차는데, 그것은 아직 `config.json` 에 없는 값이다 — 실기에서
+        // 그 화면을 보고 설정이 끝난 줄 알았고 메뉴만 계속 '초기 설정하기' 였다.
+        // 둘을 가르는 것은 머리말이 맡는다 (`SettingsIntro`).
+        if let saved = savedOfficeDraft {
             // 저장해 둔 값이 언제나 이긴다 — 사용자가 고쳐 둔 Wi-Fi 이름을 지금 붙어 있는 이름으로 덮지 않는다.
-            fill(ManualProfileDraft(
-                ip: ip, subnet: subnet, router: router,
-                dns: existingOffice.dns.joined(separator: ", "),
-                ssids: existingOffice.ssids.joined(separator: ", ")
-            ))
-            introLabel.stringValue = "사내에서 쓰는 고정 IP 값 · 저장하면 다음 전환부터 적용"
-        } else if let suggestion {
-            fill(suggestion)
-            // 지금 이 자리가 곧 사내다 — Wi-Fi 이름까지 채워졌으면 [저장] 한 번으로 자동 전환까지 선다.
-            introLabel.stringValue = suggestion.ssids.isEmpty
-                ? "지금 고정 IP 로 연결됨 · 아래 값을 사내 프로필로 저장"
-                : "지금 고정 IP 로 연결됨 · 붙어 있는 Wi-Fi 와 그 값을 사내 프로필로 저장"
+            fill(saved)
         } else {
-            fill(ManualProfileDraft())
-            // **사외에서 처음 설치한 사람이 여기 선다.** 지금은 DHCP 라 사내 값도, 사내 Wi-Fi
-            // 이름도 여기서는 알 수 없다 — 지금 붙어 있는 Wi-Fi(집·카페일 수 있다)를 사내 것으로
-            // 적어 두면 그 자리에서 고정 IP 가 걸린다. **즉 지금 채울 수 있는 것이 없다.**
-            //
-            // 그러면 빈 칸 다섯 앞에서 무엇을 빠뜨렸는지 찾게 된다. 그래서 채우라고 하지 않고
-            // **언제 채워지는지**를 말한다 — 사내에 가면 대개 이미 고정 IP 로 구성돼 있어
-            // 그때 이 창을 열면 지금 구성이 그대로 들어온다. 값을 미리 받아 둔 사람을 위해
-            // 직접 넣는 길도 열어 둔 채다 (칸은 그대로 편집 가능하다).
-            //
-            // 권한 설치는 장소와 무관하므로 아래 권한 섹션은 지금 그대로 쓸 수 있다.
-            // 메뉴의 보조 줄(`SetupChecklist.valuesArriveInOffice`)과 **같은 낱말**로 적는다 —
-            // 같은 일을 두 자리에서 다르게 부르면 다른 일로 읽힌다.
-            // 줄바꿈을 뜻 단위로 못박는다 — 맡겨 두면 '지금 / 입력해도 됨' 처럼 한 구가 갈린다.
-            introLabel.stringValue = "지금은 고정 IP 구성이 아님 · 사내에서 열면 그때 구성이 그대로 채워짐"
-                + "\n값을 미리 알면 지금 입력해도 됨"
+            fill(currentConfigurationDraft ?? ManualProfileDraft())
         }
-
-        if case .unusable(_, let reason) = observation.config {
-            introLabel.stringValue = "설정 파일을 읽지 못함 — \(reason)"
-        }
+        refreshIntro()
 
         loginItemCheckbox.state = LoginItem.isRegistered() ? .on : .off
 
@@ -235,6 +206,37 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         clearIssues()
         showDNSReadFailureIfNeeded()
+    }
+
+    /// 저장된 사내 프로필의 값. **세 값이 다 있어야** 그 프로필을 보고 있다고 말할 수 있다.
+    private var savedOfficeDraft: ManualProfileDraft? {
+        guard let office = observation.readyConfig?.profiles.first(where: { $0.mode == .manual }),
+              let ip = office.ip, let subnet = office.subnet, let router = office.router
+        else { return nil }
+        return ManualProfileDraft(
+            ip: ip, subnet: subnet, router: router,
+            dns: office.dns.joined(separator: ", "),
+            ssids: office.ssids.joined(separator: ", ")
+        )
+    }
+
+    /// 지금 시스템 구성에서 읽어낸 값. 고정 IP 로 돌고 있을 때만 나온다.
+    private var currentConfigurationDraft: ManualProfileDraft? {
+        observation.interface.flatMap {
+            ManualProfileDraft.from($0, dns: observation.dnsServers, ssid: observation.ssid)
+        }
+    }
+
+    /// 머리말을 지금 상태에 맞춘다. **저장 전인지 후인지가 여기서 갈린다.**
+    private func refreshIntro() {
+        var configFailure: String?
+        if case .unusable(_, let reason) = observation.config { configFailure = reason }
+        introLabel.stringValue = SettingsIntro.resolve(
+            hasSavedProfile: savedOfficeDraft != nil,
+            isOfficeConfiguration: observation.interface?.isManual == true,
+            hasValues: !draft.isEmpty,
+            configFailure: configFailure
+        ).text
     }
 
     /// 지금 관측으로 Wi-Fi 이름 칸의 값과 잠금을 다시 정한다.
@@ -287,6 +289,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     func update(observation: Observation) {
         self.observation = observation
         if ssidField.currentEditor() == nil { resolveSSIDField() }
+        // 값이 들어왔으면 머리말도 따라가야 한다 — '채울 것이 없음' 이 '아직 저장 안 됨' 으로 바뀐다.
+        refreshIntro()
         refreshPermissions()
     }
 
