@@ -19,10 +19,37 @@
 # 미리 보기만 하려면:  ./scripts/install.sh --dry-run
 #
 # 되돌리기:  ./scripts/uninstall.sh
+#
+# 두 길로 들어온다. **설치 로직은 이 파일 하나뿐이다** — 앱이 같은 파일을 부른다.
+#
+#   1. 터미널에서 일반 사용자로 실행 → 필요한 순간에만 sudo 로 승격한다
+#   2. 앱의 [설치] 버튼 → 관리자 인증을 거쳐 root 로 실행된다.
+#      root 로 들어올 때는 sudo 규칙을 적을 대상 계정을 알 수 없으므로 --user 로 받는다
+#
+# 그래서 설치할 원본(apply · save-config · config.example.json)은 레포 위치가 아니라
+# **이 스크립트가 놓인 자리**를 기준으로 찾는다. 레포에서 실행하든 앱 번들 안에서
+# 실행하든 같은 코드가 같은 결과를 낸다.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# 이 스크립트는 root 로도 실행된다 (앱의 [설치] 버튼). 그 자리에서 PATH 를 물려받지 않는다 —
+# apply · save-config 가 지키는 규칙과 같다.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd -P)
+SCRIPT_NAME=$(basename "$0")
+
+# 설치할 원본을 이 스크립트 기준으로 찾는다.
+#   레포     <repo>/scripts/install.sh        → apply·save-config 는 같은 자리, 예시 설정은 한 단계 위
+#   앱 번들  …/Contents/Resources/scripts/    → 넷 다 같은 자리
+SOURCE_APPLY="$SCRIPT_DIR/apply"
+SOURCE_SAVE_CONFIG="$SCRIPT_DIR/save-config"
+if [ -f "$SCRIPT_DIR/config.example.json" ]; then
+    SOURCE_CONFIG_EXAMPLE="$SCRIPT_DIR/config.example.json"
+else
+    SOURCE_CONFIG_EXAMPLE="$SCRIPT_DIR/../config.example.json"
+fi
 
 LIBEXEC_DIR=/usr/local/libexec/exem-wifi-switcher
 APPLY_PATH="$LIBEXEC_DIR/apply"
@@ -33,6 +60,11 @@ SUDOERS_PATH=/etc/sudoers.d/exem-wifi-switcher
 PROFILE_NAME_MAX_LENGTH=16
 
 DRY_RUN=0
+ASSUME_YES=0
+USER_OVERRIDE=""
+
+IS_ROOT=0
+[ "$(id -u)" -eq 0 ] && IS_ROOT=1
 
 err() { printf '%s\n' "$*" >&2; }
 die() { err ""; err "중단: $*"; exit 1; }
@@ -40,51 +72,124 @@ heading() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
 usage() {
     cat <<'USAGE'
-사용법: ./scripts/install.sh [--dry-run]
+사용법: ./scripts/install.sh [--dry-run] [--yes] [--user <계정>]
 
-  --dry-run   실제로 바꾸지 않고, 실행할 명령만 보여준다 (sudo 를 쓰지 않는다)
-  --help      이 도움말
+  --dry-run     실제로 바꾸지 않고, 실행할 명령만 보여준다 (sudo 를 쓰지 않는다)
+  --yes         확인 입력을 건너뛴다. 부르는 쪽이 같은 내용을 이미 보여주고
+                확인을 받았을 때만 쓴다 (앱의 [설치] 버튼이 이 길로 들어온다)
+  --user <계정> sudo 규칙을 적을 대상 계정. root 로 실행할 때는 반드시 지정해야 한다
+  --help        이 도움말
 USAGE
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
+        --yes) ASSUME_YES=1; shift ;;
+        --user) [ $# -ge 2 ] || die "--user 뒤에 계정 이름이 필요합니다"; USER_OVERRIDE="$2"; shift 2 ;;
         --help|-h) usage; exit 0 ;;
         *) usage >&2; die "알 수 없는 옵션입니다: $1" ;;
     esac
 done
 
 # 권한이 필요한 명령은 전부 이 함수를 통한다. dry-run 에서는 출력만 한다.
+# 이미 root 면 sudo 를 거치지 않는다 — 앱에서 들어온 경로에는 sudo 를 쓸 자리가 없다.
 run_privileged() {
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '    [dry-run] sudo %s\n' "$*"
         return 0
     fi
-    sudo "$@"
+    if [ "$IS_ROOT" -eq 1 ]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+# --- 안전성 검사 ------------------------------------------------------------
+
+# 권한 비트가 root 외의 사용자에게 쓰기를 열어 주는가. 열려 있으면 0(참).
+# 판독할 수 없는 값은 위험한 쪽으로 판정한다(fail closed).
+# 그룹 쓰기도 world 쓰기와 똑같이 위험하다 — 그 그룹의 아무 프로세스나 내용을 갈아 끼울 수 있다.
+mode_allows_foreign_write() {
+    local perms="${1-}"
+    if [[ ! "$perms" =~ ^[0-7]{3,5}$ ]]; then
+        return 0
+    fi
+    if [ $(( 8#$perms & 8#0022 )) -ne 0 ]; then
+        return 0
+    fi
+    return 1
+}
+
+# 이 파일을 "소유자 말고 다른 사람" 이 고칠 수 있는가.
+#
+# root 로 실행될 내용을 여기서 읽어 가므로, 아무나 쓸 수 있는 자리에 있으면 설치하지 않는다.
+# 심링크는 따라가지 않고 그대로 거부한다 — 링크가 가리키는 자리를 우리가 보장할 수 없다.
+assert_not_foreign_writable() {
+    local path="$1" label="$2" perms
+    if [ -L "$path" ]; then
+        die "$label 이 심볼릭 링크입니다: $path"
+    fi
+    if [ ! -e "$path" ]; then
+        die "$label 이 없습니다: $path"
+    fi
+    perms=$(stat -f '%OLp' "$path") || die "$label 의 권한을 읽지 못했습니다: $path"
+    if mode_allows_foreign_write "$perms"; then
+        die "$label 을 소유자 외의 사용자가 고칠 수 있습니다: $path (권한 $perms)
+     root 로 실행될 내용을 여기서 가져오므로, 이 상태에서는 설치하지 않습니다."
+    fi
+}
+
+# root 로 돌 때 이 스크립트 자신이 신뢰할 수 있는 자리에 있는지 본다.
+#
+# 앱 번들은 사용자가 쓸 수 있는 자리에 놓이므로 **앱 자신은 신뢰 경계가 아니다.**
+# 이 검사가 막는 것은 "이 Mac 의 다른 계정이 내용을 갈아 끼울 수 있는 상태" 까지다.
+# 그 이상은 보장하지 않는다 (apply · save-config 의 assert_self_is_safe 와 같은 발상).
+assert_self_is_safe() {
+    assert_not_foreign_writable "$SCRIPT_DIR" "설치 스크립트 디렉터리"
+    assert_not_foreign_writable "$SCRIPT_DIR/$SCRIPT_NAME" "설치 스크립트"
 }
 
 # --- 사전 점검 --------------------------------------------------------------
 
 [ "$(uname)" = "Darwin" ] || die "macOS 에서만 동작합니다"
 [ -x /usr/sbin/networksetup ] || die "networksetup 을 찾지 못했습니다"
-[ -f "$REPO_ROOT/scripts/apply" ] || die "scripts/apply 가 없습니다 (레포가 온전한지 확인하세요)"
-[ -f "$REPO_ROOT/scripts/save-config" ] || die "scripts/save-config 가 없습니다 (레포가 온전한지 확인하세요)"
-[ -f "$REPO_ROOT/config.example.json" ] || die "config.example.json 이 없습니다"
+[ -f "$SOURCE_APPLY" ] || die "apply 를 찾지 못했습니다: $SOURCE_APPLY"
+[ -f "$SOURCE_SAVE_CONFIG" ] || die "save-config 를 찾지 못했습니다: $SOURCE_SAVE_CONFIG"
+[ -f "$SOURCE_CONFIG_EXAMPLE" ] || die "config.example.json 을 찾지 못했습니다: $SOURCE_CONFIG_EXAMPLE"
+
+# root 자리에 놓을 내용이 오는 곳부터 확인한다.
+assert_not_foreign_writable "$SOURCE_APPLY" "설치할 apply"
+assert_not_foreign_writable "$SOURCE_SAVE_CONFIG" "설치할 save-config"
+assert_not_foreign_writable "$SOURCE_CONFIG_EXAMPLE" "예시 설정 파일"
 
 # 문법이 깨진 스크립트를 root 자리에 놓지 않는다.
-bash -n "$REPO_ROOT/scripts/apply" || die "scripts/apply 에 문법 오류가 있습니다"
-bash -n "$REPO_ROOT/scripts/save-config" || die "scripts/save-config 에 문법 오류가 있습니다"
+bash -n "$SOURCE_APPLY" || die "apply 에 문법 오류가 있습니다"
+bash -n "$SOURCE_SAVE_CONFIG" || die "save-config 에 문법 오류가 있습니다"
 
-# 이 스크립트 자체는 일반 사용자로 실행한다. 권한이 필요한 부분만 sudo 를 쓴다.
-if [ "$(id -u)" -eq 0 ] && [ -z "${SUDO_USER:-}" ]; then
-    die "일반 사용자 계정으로 실행하세요 (필요한 순간에만 sudo 로 승격합니다)"
+# 터미널에서는 일반 사용자로 실행한다 (권한이 필요한 부분만 sudo).
+# 앱에서 관리자 인증을 거쳐 들어오면 이미 root 다. 그때는 규칙을 적을 계정을 알 수 없으므로
+# --user 로 받고, 이 파일 자신이 신뢰할 만한 자리에 있는지 먼저 확인한다.
+if [ "$IS_ROOT" -eq 1 ]; then
+    assert_self_is_safe
+    if [ -z "$USER_OVERRIDE" ] && [ -z "${SUDO_USER:-}" ]; then
+        die "root 로 실행할 때는 --user <계정> 으로 sudo 규칙을 적을 대상을 지정하세요
+     (그냥 실행하면 root 계정 앞으로 규칙이 적혀 아무 쓸모가 없습니다)"
+    fi
 fi
-TARGET_USER="${SUDO_USER:-$(id -un)}"
-id -u "$TARGET_USER" >/dev/null 2>&1 || die "사용자를 확인하지 못했습니다: $TARGET_USER"
+TARGET_USER="${USER_OVERRIDE:-${SUDO_USER:-$(id -un)}}"
 case "$TARGET_USER" in
     ''|*[!a-zA-Z0-9._-]*) die "사용자 이름에 예상 밖의 문자가 있습니다: '$TARGET_USER'" ;;
 esac
+TARGET_UID=$(id -u "$TARGET_USER" 2>/dev/null) || die "사용자를 확인하지 못했습니다: $TARGET_USER"
+case "$TARGET_UID" in
+    ''|*[!0-9]*) die "사용자 uid 를 읽지 못했습니다: $TARGET_USER" ;;
+esac
+# 시스템 계정(uid < 500)에는 규칙을 넣지 않는다. 로그인해서 쓰는 계정만 대상이다.
+if [ "$TARGET_UID" -lt 500 ]; then
+    die "로그인 계정이 아닙니다: $TARGET_USER (uid=$TARGET_UID)"
+fi
 
 # Homebrew 가 이 경로를 쓰고 있는가. (Intel Mac 의 Homebrew 는 /usr/local 을 사용자 소유로 바꾼다)
 homebrew_owns_usr_local() {
@@ -184,6 +289,9 @@ cat <<PLAN
 
 이 스크립트는 아래 작업만 합니다. 그 외에는 어떤 파일도 만들지 않습니다.
 
+ 설치 원본  $SCRIPT_DIR
+ 대상 계정  $TARGET_USER
+
  1) 권한 스크립트 배치
       $LIBEXEC_DIR/   (디렉터리, root:wheel 0755)
         apply         root:wheel 0755 — networksetup -setmanual / -setdhcp 를 실행합니다.
@@ -229,9 +337,12 @@ PLAN
 
 if [ "$DRY_RUN" -eq 1 ]; then
     printf '%s\n' "[dry-run] 실제로는 아무것도 바꾸지 않습니다. 실행할 명령만 보여줍니다."
+elif [ "$ASSUME_YES" -eq 1 ]; then
+    # 부르는 쪽이 같은 내용을 보여주고 확인을 받았다는 전제다 (앱의 [설치] 버튼).
+    printf '%s\n' "확인을 받았다는 전제로 진행합니다 (--yes)."
 else
     if [ ! -t 0 ]; then
-        die "확인 입력을 받을 수 없는 환경입니다 (터미널에서 직접 실행하세요)"
+        die "확인 입력을 받을 수 없는 환경입니다 (터미널에서 직접 실행하거나 --yes 를 쓰세요)"
     fi
     printf '위 내용대로 설치하려면 yes 를 입력하세요: '
     read -r reply
@@ -255,8 +366,8 @@ for parent in /usr/local /usr/local/libexec /usr/local/etc; do
 done
 
 run_privileged /usr/bin/install -d -o root -g wheel -m 0755 "$LIBEXEC_DIR"
-run_privileged /usr/bin/install -o root -g wheel -m 0755 "$REPO_ROOT/scripts/apply" "$APPLY_PATH"
-run_privileged /usr/bin/install -o root -g wheel -m 0755 "$REPO_ROOT/scripts/save-config" "$SAVE_CONFIG_PATH"
+run_privileged /usr/bin/install -o root -g wheel -m 0755 "$SOURCE_APPLY" "$APPLY_PATH"
+run_privileged /usr/bin/install -o root -g wheel -m 0755 "$SOURCE_SAVE_CONFIG" "$SAVE_CONFIG_PATH"
 printf '    %s\n' "$APPLY_PATH"
 printf '    %s\n' "$SAVE_CONFIG_PATH"
 
@@ -272,7 +383,7 @@ if [ -f "$CONFIG_PATH" ]; then
     run_privileged /bin/chmod 0644 "$CONFIG_PATH"
     printf '    기존 설정을 유지하고 권한만 맞췄습니다: %s (root:wheel 0644)\n' "$CONFIG_PATH"
 else
-    run_privileged /usr/bin/install -o root -g wheel -m 0644 "$REPO_ROOT/config.example.json" "$CONFIG_PATH"
+    run_privileged /usr/bin/install -o root -g wheel -m 0644 "$SOURCE_CONFIG_EXAMPLE" "$CONFIG_PATH"
     printf '    예시 설정을 복사했습니다: %s\n' "$CONFIG_PATH"
     printf '    앱의 설정 창에서 실제 값을 등록하세요 (저장할 때 관리자 인증을 한 번 받습니다)\n'
 fi
@@ -299,8 +410,13 @@ run_privileged /usr/bin/install -o root -g wheel -m 0440 "$SUDOERS_TEMP" "$SUDOE
 
 # 설치 후 전체 sudoers 를 다시 검증한다. 문제가 있으면 즉시 되돌린다.
 if [ "$DRY_RUN" -eq 0 ]; then
-    if ! sudo visudo -c >/dev/null 2>&1; then
-        sudo rm -f "$SUDOERS_PATH"
+    if [ "$IS_ROOT" -eq 1 ]; then
+        visudo_ok() { visudo -c >/dev/null 2>&1; }
+    else
+        visudo_ok() { sudo visudo -c >/dev/null 2>&1; }
+    fi
+    if ! visudo_ok; then
+        run_privileged /bin/rm -f "$SUDOERS_PATH"
         die "설치 후 전체 sudoers 검증에 실패해 방금 넣은 파일을 되돌렸습니다"
     fi
     printf '    전체 sudoers 검증 통과: %s\n' "$SUDOERS_PATH"
@@ -309,19 +425,33 @@ fi
 # --- 확인 -------------------------------------------------------------------
 
 heading "설치 결과"
+
+# 규칙이 대상 계정에 실제로 걸렸는지 sudo 에게 되묻는다.
+#
+# root 로 실행 중일 때는 -U 로 대상 계정의 규칙을 조회한다. 이 경우 root 는 애초에 암호를
+# 묻지 않으므로 "무암호인가" 까지는 확인되지 않는다 — 규칙이 그 계정·그 경로·그 인자에
+# 걸리는지까지만 본다. (터미널에서 사용자로 실행하면 -n 이 무암호 여부까지 확인한다)
+sudo_rule_matches() {
+    if [ "$IS_ROOT" -eq 1 ]; then
+        sudo -n -l -U "$TARGET_USER" "$@" >/dev/null 2>&1
+    else
+        sudo -n -l "$@" >/dev/null 2>&1
+    fi
+}
+
 if [ "$DRY_RUN" -eq 1 ]; then
     printf '  [dry-run] 아무것도 설치하지 않았습니다.\n'
 else
     ls -l "$APPLY_PATH" "$SAVE_CONFIG_PATH" "$SUDOERS_PATH" "$CONFIG_PATH"
     printf '\n  암호 없이 실행되는지 확인:\n'
-    if sudo -n -l "$APPLY_PATH" dhcp >/dev/null 2>&1; then
+    if sudo_rule_matches "$APPLY_PATH" dhcp; then
         printf '    apply — 확인됨. 프로필 전환 시 암호를 묻지 않습니다\n'
     else
         printf '    apply — 아직 확인되지 않았습니다. 새 터미널에서 아래 명령으로 다시 확인하세요:\n'
         printf '      sudo -n -l %s dhcp\n' "$APPLY_PATH"
     fi
     # save-config 가 무암호로 열려 있으면 설정 파일을 잠근 의미가 사라진다. 그 경우 소리 내어 알린다.
-    if sudo -n -l "$SAVE_CONFIG_PATH" >/dev/null 2>&1; then
+    if sudo_rule_matches "$SAVE_CONFIG_PATH"; then
         printf '\n    경고: save-config 가 암호 없이 실행됩니다.\n'
         printf '      %s 에 이 경로를 여는 규칙이 남아 있는지 확인하세요.\n' "$SUDOERS_PATH"
         printf '      이 상태에서는 설정 파일을 root 소유로 잠근 의미가 없습니다.\n'

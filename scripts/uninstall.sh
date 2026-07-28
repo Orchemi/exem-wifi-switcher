@@ -20,8 +20,20 @@
 # 지우지 않은 것(앱 번들·알림 권한)은 마무리 문구에 그대로 적는다 — "전부 지웠다" 로 뭉뚱그리지 않는다.
 #
 # 미리 보기:  ./scripts/uninstall.sh --dry-run
+#
+# install.sh 와 같이 두 길로 들어온다 (터미널 / 앱의 [제거] 버튼).
+# root 로 들어오면 HOME 이 root 의 것이라 사용자 쪽 흔적을 찾지 못하므로, --user 로 받은
+# 계정에서 홈 디렉터리·uid 를 다시 구한다. 그러지 않으면 로그인 항목과 앱 설정값이 남는데도
+# "전부 지웠다" 로 끝나 버린다.
 # ---------------------------------------------------------------------------
 set -euo pipefail
+
+# install.sh 와 같은 이유로 PATH 를 물려받지 않는다 (root 로도 실행된다).
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd -P)
+SCRIPT_NAME=$(basename "$0")
 
 LIBEXEC_DIR=/usr/local/libexec/exem-wifi-switcher
 CONFIG_DIR=/usr/local/etc/exem-wifi-switcher
@@ -29,18 +41,15 @@ SUDOERS_PATH=/etc/sudoers.d/exem-wifi-switcher
 BUNDLE_ID=com.horbis.exem-wifi-switcher
 AGENT_LABEL="$BUNDLE_ID.agent"
 APP_PROCESS_NAME="EXEM Wifi Switcher"
-# HOME 이 없는 환경(자동화·테스트)에서는 로그인 항목 경로를 만들지 않는다.
-# 빈 문자열을 이어붙이면 사용자 파일이 아니라 시스템 경로(/Library/...)를 가리키게 되므로
-# 아예 대상에서 제외하는 편이 안전하다.
-AGENT_PLIST=""
-PREFERENCES_PLIST=""
-if [ -n "${HOME:-}" ]; then
-    AGENT_PLIST="$HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
-    PREFERENCES_PLIST="$HOME/Library/Preferences/$BUNDLE_ID.plist"
-fi
 
 DRY_RUN=0
 KEEP_CONFIG=0
+ASSUME_YES=0
+SKIP_RUNNING_APP=0
+USER_OVERRIDE=""
+
+IS_ROOT=0
+[ "$(id -u)" -eq 0 ] && IS_ROOT=1
 
 err() { printf '%s\n' "$*" >&2; }
 die() { err ""; err "중단: $*"; exit 1; }
@@ -48,11 +57,16 @@ heading() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
 usage() {
     cat <<'USAGE'
-사용법: ./scripts/uninstall.sh [--dry-run] [--keep-config]
+사용법: ./scripts/uninstall.sh [--dry-run] [--keep-config] [--yes] [--user <계정>]
+                              [--skip-running-app]
 
-  --dry-run       실제로 지우지 않고, 실행할 명령만 보여준다
-  --keep-config   /usr/local/etc/exem-wifi-switcher 의 설정을 남긴다
-  --help          이 도움말
+  --dry-run           실제로 지우지 않고, 실행할 명령만 보여준다
+  --keep-config       /usr/local/etc/exem-wifi-switcher 의 설정을 남긴다
+  --yes               확인 입력을 건너뛴다. 부르는 쪽이 같은 내용을 이미 보여주고
+                      확인을 받았을 때만 쓴다 (앱의 [제거] 버튼이 이 길로 들어온다)
+  --user <계정>       사용자 쪽 흔적을 찾을 계정. root 로 실행할 때는 반드시 지정해야 한다
+  --skip-running-app  실행 중인 앱을 종료하지 않는다 (앱이 자기 자신을 부를 때)
+  --help              이 도움말
 USAGE
 }
 
@@ -60,6 +74,9 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
         --keep-config) KEEP_CONFIG=1; shift ;;
+        --yes) ASSUME_YES=1; shift ;;
+        --skip-running-app) SKIP_RUNNING_APP=1; shift ;;
+        --user) [ $# -ge 2 ] || die "--user 뒤에 계정 이름이 필요합니다"; USER_OVERRIDE="$2"; shift 2 ;;
         --help|-h) usage; exit 0 ;;
         *) usage >&2; die "알 수 없는 옵션입니다: $1" ;;
     esac
@@ -70,7 +87,102 @@ run_privileged() {
         printf '    [dry-run] sudo %s\n' "$*"
         return 0
     fi
-    sudo "$@"
+    if [ "$IS_ROOT" -eq 1 ]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+# --- 이 스크립트가 놓인 자리 --------------------------------------------------
+
+mode_allows_foreign_write() {
+    local perms="${1-}"
+    if [[ ! "$perms" =~ ^[0-7]{3,5}$ ]]; then
+        return 0
+    fi
+    if [ $(( 8#$perms & 8#0022 )) -ne 0 ]; then
+        return 0
+    fi
+    return 1
+}
+
+assert_not_foreign_writable() {
+    local path="$1" label="$2" perms
+    if [ -L "$path" ]; then
+        die "$label 이 심볼릭 링크입니다: $path"
+    fi
+    if [ ! -e "$path" ]; then
+        die "$label 이 없습니다: $path"
+    fi
+    perms=$(stat -f '%OLp' "$path") || die "$label 의 권한을 읽지 못했습니다: $path"
+    if mode_allows_foreign_write "$perms"; then
+        die "$label 을 소유자 외의 사용자가 고칠 수 있습니다: $path (권한 $perms)"
+    fi
+}
+
+# install.sh 와 같은 이유로, root 로 돌 때만 자기 자리를 확인한다.
+assert_self_is_safe() {
+    assert_not_foreign_writable "$SCRIPT_DIR" "제거 스크립트 디렉터리"
+    assert_not_foreign_writable "$SCRIPT_DIR/$SCRIPT_NAME" "제거 스크립트"
+}
+
+# --- 사용자 쪽 맥락 ----------------------------------------------------------
+#
+# 로그인 항목·앱 설정값·위치 권한 기록은 전부 **사용자** 에게 달려 있다.
+# root 로 실행되면 HOME 이 /var/root 라 그대로 두면 남의 집을 뒤지게 된다.
+
+if [ "$IS_ROOT" -eq 1 ]; then
+    assert_self_is_safe
+    if [ -z "$USER_OVERRIDE" ] && [ -z "${SUDO_USER:-}" ]; then
+        die "root 로 실행할 때는 --user <계정> 으로 대상을 지정하세요
+     (그러지 않으면 로그인 항목과 앱 설정값이 남는데도 다 지웠다고 끝납니다)"
+    fi
+fi
+TARGET_USER="${USER_OVERRIDE:-${SUDO_USER:-$(id -un)}}"
+case "$TARGET_USER" in
+    ''|*[!a-zA-Z0-9._-]*) die "사용자 이름에 예상 밖의 문자가 있습니다: '$TARGET_USER'" ;;
+esac
+TARGET_UID=$(id -u "$TARGET_USER" 2>/dev/null) || die "사용자를 확인하지 못했습니다: $TARGET_USER"
+case "$TARGET_UID" in
+    ''|*[!0-9]*) die "사용자 uid 를 읽지 못했습니다: $TARGET_USER" ;;
+esac
+
+# 홈 디렉터리는 디렉터리 서비스에 물어본다 — HOME 은 실행 맥락에 따라 달라진다.
+# (dscl 대신 dscacheutil 을 쓰는 이유는 홈 경로를 스크립트에 적지 않아도 되기 때문이다)
+# 이름에 공백이 있는 홈도 통째로 받도록 접두어만 떼어 낸다.
+read_target_home() {
+    local raw line
+    raw=$(dscacheutil -q user -a name "$TARGET_USER" 2>/dev/null) || return 1
+    while IFS= read -r line; do
+        case "$line" in
+            "dir: "*) printf '%s' "${line#dir: }"; return 0 ;;
+        esac
+    done <<< "$raw"
+    return 1
+}
+TARGET_HOME=$(read_target_home) || TARGET_HOME=""
+if [ -z "$TARGET_HOME" ] && [ "$IS_ROOT" -eq 0 ]; then
+    TARGET_HOME="${HOME:-}"
+fi
+
+# 홈을 찾지 못한 환경(자동화·테스트)에서는 사용자 쪽 경로를 아예 만들지 않는다.
+# 빈 문자열을 이어붙이면 시스템 경로(/Library/...)를 가리키게 되므로 대상에서 빼는 편이 안전하다.
+AGENT_PLIST=""
+PREFERENCES_PLIST=""
+if [ -n "$TARGET_HOME" ] && [ "$TARGET_HOME" != "/" ]; then
+    AGENT_PLIST="$TARGET_HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
+    PREFERENCES_PLIST="$TARGET_HOME/Library/Preferences/$BUNDLE_ID.plist"
+fi
+
+# 사용자 맥락이 필요한 명령(defaults · tccutil)은 그 사용자로 실행한다.
+# root 로 실행하면 root 의 설정과 root 의 권한 기록을 건드리게 된다.
+run_as_target_user() {
+    if [ "$IS_ROOT" -eq 1 ] && [ "$TARGET_USER" != "root" ]; then
+        sudo -u "$TARGET_USER" "$@"
+    else
+        "$@"
+    fi
 }
 
 # --- 무엇을 지울지 먼저 보여준다 ---------------------------------------------
@@ -113,7 +225,11 @@ fi
 # 아래 둘은 파일이 아니라 상태다. 남아 있는지 파일처럼 확인할 수 없으므로 항상 시도한다.
 printf '  [시도] 위치 권한(TCC) 기록 초기화 — tccutil reset Location %s\n' "$BUNDLE_ID"
 if pgrep -x "$APP_PROCESS_NAME" >/dev/null 2>&1; then
-    printf '  [있음] 실행 중인 앱 — 종료합니다 (%s)\n' "$APP_PROCESS_NAME"
+    if [ "$SKIP_RUNNING_APP" -eq 1 ]; then
+        printf '  [있음] 실행 중인 앱 — 종료하지 않습니다 (--skip-running-app)\n'
+    else
+        printf '  [있음] 실행 중인 앱 — 종료합니다 (%s)\n' "$APP_PROCESS_NAME"
+    fi
     present_count=$(( present_count + 1 ))
 else
     printf '  [없음] 실행 중인 앱\n'
@@ -124,16 +240,18 @@ printf '\n앱 번들(%s.app)은 사용자가 둔 자리에 있어 이 스크립�
 if [ "$present_count" -eq 0 ]; then
     printf '지울 파일이 없습니다. 위치 권한 기록만 정리하고 끝냅니다.\n'
     if [ "$DRY_RUN" -eq 0 ]; then
-        tccutil reset Location "$BUNDLE_ID" >/dev/null 2>&1 || true
+        run_as_target_user tccutil reset Location "$BUNDLE_ID" >/dev/null 2>&1 || true
     fi
     exit 0
 fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
     printf '%s\n' "[dry-run] 실제로는 아무것도 지우지 않습니다."
+elif [ "$ASSUME_YES" -eq 1 ]; then
+    printf '%s\n' "확인을 받았다는 전제로 진행합니다 (--yes)."
 else
     if [ ! -t 0 ]; then
-        die "확인 입력을 받을 수 없는 환경입니다 (터미널에서 직접 실행하세요)"
+        die "확인 입력을 받을 수 없는 환경입니다 (터미널에서 직접 실행하거나 --yes 를 쓰세요)"
     fi
     printf '위 항목을 지우려면 yes 를 입력하세요: '
     read -r reply
@@ -143,7 +261,10 @@ fi
 # --- 1) 실행 중인 앱 ---------------------------------------------------------
 
 heading "1/6  실행 중인 앱"
-if pgrep -x "$APP_PROCESS_NAME" >/dev/null 2>&1; then
+if [ "$SKIP_RUNNING_APP" -eq 1 ]; then
+    # 앱이 자기 자신을 제거하는 길이다. 여기서 앱을 죽이면 사용자는 결과를 볼 창을 잃는다.
+    printf '    종료하지 않습니다 — 앱에서 제거를 실행했습니다\n'
+elif pgrep -x "$APP_PROCESS_NAME" >/dev/null 2>&1; then
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '    [dry-run] pkill -x %s\n' "$APP_PROCESS_NAME"
     else
@@ -165,10 +286,11 @@ fi
 heading "2/6  로그인 항목"
 if [ -n "$AGENT_PLIST" ] && [ -f "$AGENT_PLIST" ]; then
     if [ "$DRY_RUN" -eq 1 ]; then
-        printf '    [dry-run] launchctl bootout gui/%s/%s\n' "$(id -u)" "$AGENT_LABEL"
+        printf '    [dry-run] launchctl bootout gui/%s/%s\n' "$TARGET_UID" "$AGENT_LABEL"
         printf '    [dry-run] rm -f %s\n' "$AGENT_PLIST"
     else
-        launchctl bootout "gui/$(id -u)/$AGENT_LABEL" >/dev/null 2>&1 || true
+        # 대상 계정의 GUI 도메인을 지정한다 — root 로 돌 때 id -u 는 0 이라 남의 도메인을 본다.
+        launchctl bootout "gui/$TARGET_UID/$AGENT_LABEL" >/dev/null 2>&1 || true
         rm -f "$AGENT_PLIST"
         printf '    제거했습니다: %s\n' "$AGENT_PLIST"
     fi
@@ -226,7 +348,7 @@ if [ -n "$PREFERENCES_PLIST" ] && [ -e "$PREFERENCES_PLIST" ]; then
         printf '    [dry-run] rm -f %s\n' "$PREFERENCES_PLIST"
     else
         # defaults 를 먼저 지운다. cfprefsd 가 값을 캐시하고 있어, 파일만 지우면 되살아난다.
-        defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
+        run_as_target_user defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
         rm -f "$PREFERENCES_PLIST"
         printf '    제거했습니다: %s\n' "$PREFERENCES_PLIST"
     fi
@@ -238,7 +360,7 @@ fi
 # "승인한 적 없는데 승인돼 있는" 상태가 남는다. 실패해도 제거를 멈추지 않는다.
 if [ "$DRY_RUN" -eq 1 ]; then
     printf '    [dry-run] tccutil reset Location %s\n' "$BUNDLE_ID"
-elif tccutil reset Location "$BUNDLE_ID" >/dev/null 2>&1; then
+elif run_as_target_user tccutil reset Location "$BUNDLE_ID" >/dev/null 2>&1; then
     printf '    위치 권한 기록을 초기화했습니다: %s\n' "$BUNDLE_ID"
 else
     printf '    위치 권한 기록을 초기화하지 못했습니다. 직접 실행하세요:\n'
@@ -269,7 +391,14 @@ if [ -n "$AGENT_PLIST" ]; then
     check_gone "$AGENT_PLIST"
 fi
 if [ -n "$PREFERENCES_PLIST" ]; then
-    check_gone "$PREFERENCES_PLIST"
+    if [ "$SKIP_RUNNING_APP" -eq 1 ] && [ -e "$PREFERENCES_PLIST" ]; then
+        # 앱이 아직 돌고 있으면 cfprefsd 가 설정값 파일을 다시 만들 수 있다.
+        # 실패로 세지 않되 뭉개지도 않는다 — 무엇을 더 하면 되는지 그대로 적는다.
+        printf '  남아 있음: %s\n' "$PREFERENCES_PLIST"
+        printf '    앱이 실행 중이라 다시 만들어진 것으로 보입니다. 앱을 종료한 뒤 다시 실행하면 지워집니다\n'
+    else
+        check_gone "$PREFERENCES_PLIST"
+    fi
 fi
 if [ "$KEEP_CONFIG" -eq 0 ]; then
     check_gone "$CONFIG_DIR"

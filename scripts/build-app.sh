@@ -16,11 +16,17 @@
 # 서명은 ad-hoc(`--sign -`) 이다. 유료 인증서가 없어 "확인되지 않은 개발자" 표기는
 # 남지만, 위치 권한은 번들 식별자 단위로 유지되므로 재빌드해도 다시 승인할 필요는 없다.
 #
+# 번들은 설치 스크립트를 함께 품는다 (Contents/Resources/scripts/).
+#   앱의 [설치] 버튼이 관리자 인증을 받아 **그 스크립트를 그대로 실행**한다.
+#   설치 로직을 Swift 로 다시 구현하지 않는 이유가 여기에 있다 — 두 벌이 되면 반드시 어긋난다.
+#   번들 안 파일은 코드서명에 봉인되므로, 손대면 codesign --verify 가 걸러 낸다.
+#
 # 사용법
 #   ./scripts/build-app.sh                 dist/ 에 조립
 #   ./scripts/build-app.sh --output ~/tmp  다른 위치에 조립
 #   ./scripts/build-app.sh --debug         디버그 구성으로 빌드
 #   ./scripts/build-app.sh --print-plist   빌드 없이 Info.plist 만 출력 (테스트가 쓴다)
+#   ./scripts/build-app.sh --print-version 빌드 없이 버전만 출력 (릴리즈 묶기가 쓴다)
 #
 # 이 스크립트는 시스템에 아무것도 설치하지 않는다. 만든 '.app' 을 어디에 둘지,
 # 로그인 항목으로 등록할지는 전부 사용자가 정한다.
@@ -42,6 +48,7 @@ LOCATION_USAGE="접속한 Wi-Fi 이름(SSID)을 확인해 사내 네트워크인
 OUTPUT_DIR="$REPO_ROOT/dist"
 CONFIGURATION=release
 PRINT_PLIST_ONLY=0
+PRINT_VERSION_ONLY=0
 
 err() { printf '%s\n' "$*" >&2; }
 die() { err ""; err "중단: $*"; exit 1; }
@@ -54,6 +61,7 @@ usage() {
   --output <경로>   번들을 만들 디렉터리 (기본: dist)
   --debug           디버그 구성으로 빌드 (기본: release)
   --print-plist     빌드하지 않고 Info.plist 만 출력한다
+  --print-version   빌드하지 않고 버전(CFBundleShortVersionString)만 출력한다
   --help            이 도움말
 USAGE
 }
@@ -63,6 +71,7 @@ while [ $# -gt 0 ]; do
         --output) [ $# -ge 2 ] || die "--output 뒤에 경로가 필요합니다"; OUTPUT_DIR="$2"; shift 2 ;;
         --debug) CONFIGURATION=debug; shift ;;
         --print-plist) PRINT_PLIST_ONLY=1; shift ;;
+        --print-version) PRINT_VERSION_ONLY=1; shift ;;
         --help|-h) usage; exit 0 ;;
         *) usage >&2; die "알 수 없는 옵션입니다: $1" ;;
     esac
@@ -114,6 +123,11 @@ info_plist() {
 PLIST
 }
 
+if [ "$PRINT_VERSION_ONLY" -eq 1 ]; then
+    printf '%s\n' "$SHORT_VERSION"
+    exit 0
+fi
+
 if [ "$PRINT_PLIST_ONLY" -eq 1 ]; then
     info_plist
     exit 0
@@ -129,10 +143,13 @@ command -v plutil >/dev/null || die "plutil 을 찾지 못했습니다"
 APP_BUNDLE="$OUTPUT_DIR/$APP_NAME.app"
 CONTENTS="$APP_BUNDLE/Contents"
 ICONS_DIR="$REPO_ROOT/Resources/icons"
+# 앱이 관리자 인증을 받아 실행할 설치 스크립트가 놓이는 자리.
+# Swift 쪽 InstallPaths.bundledScriptsSubpath 와 같은 값이어야 한다 (테스트가 검사한다).
+BUNDLED_SCRIPTS_DIR="$CONTENTS/Resources/scripts"
 
 # --- 1) 빌드 ----------------------------------------------------------------
 
-heading "1/4  실행 파일 빌드 ($CONFIGURATION)"
+heading "1/5  실행 파일 빌드 ($CONFIGURATION)"
 swift build -c "$CONFIGURATION" --package-path "$REPO_ROOT" --product "$PRODUCT"
 BIN_PATH="$(swift build -c "$CONFIGURATION" --package-path "$REPO_ROOT" --show-bin-path)"
 [ -x "$BIN_PATH/$PRODUCT" ] || die "빌드 결과를 찾지 못했습니다: $BIN_PATH/$PRODUCT"
@@ -140,7 +157,7 @@ printf '    %s\n' "$BIN_PATH/$PRODUCT"
 
 # --- 2) 번들 조립 -----------------------------------------------------------
 
-heading "2/4  번들 조립"
+heading "2/5  번들 조립"
 rm -rf "$APP_BUNDLE"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
@@ -154,12 +171,28 @@ plutil -lint "$CONTENTS/Info.plist" >/dev/null || die "Info.plist 문법 검사�
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 printf '    %s\n' "$APP_BUNDLE"
 
-# --- 3) 아이콘 --------------------------------------------------------------
+# --- 3) 설치 스크립트 ---------------------------------------------------------
+#
+# 앱의 [설치] 버튼이 부르는 것이 바로 이 파일들이다. 터미널에서 실행하는 것과 **같은 스크립트**다.
+# install.sh 는 자기 위치를 기준으로 원본을 찾으므로, 넷을 한 디렉터리에 나란히 둔다.
+
+heading "3/5  설치 스크립트"
+mkdir -p "$BUNDLED_SCRIPTS_DIR"
+for script in install.sh uninstall.sh apply save-config; do
+    [ -f "$REPO_ROOT/scripts/$script" ] || die "scripts/$script 이 없습니다"
+    # 문법이 깨진 스크립트를 번들에 넣지 않는다 — 설치 버튼을 누른 뒤에 알게 되면 늦다.
+    bash -n "$REPO_ROOT/scripts/$script" || die "scripts/$script 에 문법 오류가 있습니다"
+    install -m 0755 "$REPO_ROOT/scripts/$script" "$BUNDLED_SCRIPTS_DIR/$script"
+done
+install -m 0644 "$REPO_ROOT/config.example.json" "$BUNDLED_SCRIPTS_DIR/config.example.json"
+printf '    %s\n' "$(printf '%s ' install.sh uninstall.sh apply save-config config.example.json)"
+
+# --- 4) 아이콘 --------------------------------------------------------------
 #
 # 아이콘은 별도로 만들어진다(Resources/icons/README.md). 아직 없으면 경고만 하고 넘어간다 —
 # 앱은 아이콘 파일이 없으면 SF Symbols 로 대신 그린다.
 
-heading "3/4  아이콘"
+heading "4/5  아이콘"
 if [ -f "$ICONS_DIR/app/AppIcon.icns" ]; then
     cp "$ICONS_DIR/app/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
     printf '    앱 아이콘  AppIcon.icns\n'
@@ -183,9 +216,13 @@ else
     printf '    메뉴바 아이콘 없음 — SF Symbols 로 대신 그립니다\n'
 fi
 
-# --- 4) 서명 ----------------------------------------------------------------
+# --- 5) 서명 ----------------------------------------------------------------
+#
+# 번들 안 파일을 전부 넣은 **뒤에** 서명한다. Contents/Resources 도 서명에 봉인되므로,
+# 나중에 설치 스크립트를 손대면 codesign --verify 가 어긋난 것을 알려 준다.
+# ad-hoc 서명은 신뢰의 근거가 아니다(누구나 다시 서명할 수 있다) — 손댄 흔적을 잡는 장치다.
 
-heading "4/4  ad-hoc 서명"
+heading "5/5  ad-hoc 서명"
 codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"
 codesign --verify --strict "$APP_BUNDLE"
 printf '    서명 확인됨 (ad-hoc, 식별자 %s)\n' "$BUNDLE_ID"
@@ -199,11 +236,12 @@ cat <<NEXT
 
 다음 할 일 (전부 사용자가 직접 합니다 — 이 스크립트는 시스템을 바꾸지 않습니다)
 
-  1. 전환 권한 설치      ./scripts/install.sh
-  2. 앱 옮기기(선택)     mv "$APP_BUNDLE" /Applications/
-  3. 실행                open "$APP_BUNDLE"
+  1. 앱 옮기기(선택)     mv "$APP_BUNDLE" /Applications/
+  2. 실행                open "$APP_BUNDLE"
                          첫 실행에서 설정 창이 뜹니다.
+  3. 전환 권한 설치      설정 창의 권한 섹션에서 [설치] 를 누릅니다.
+                         터미널로 하려면: ./scripts/install.sh
   4. 로그인 시 자동 실행  설정 창의 체크상자로 켜고 끕니다.
 
-되돌리기               ./scripts/uninstall.sh  (앱 번들은 직접 지우세요)
+되돌리기               설정 창의 [제거] (또는 ./scripts/uninstall.sh). 앱 번들은 직접 지우세요
 NEXT

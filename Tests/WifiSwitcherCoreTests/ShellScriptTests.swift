@@ -54,7 +54,8 @@ struct ShellScriptTests {
         #expect(result.succeeded)
     }
 
-    @Test("스크립트에 문법 오류가 없다", arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh", "scripts/build-app.sh"])
+    @Test("스크립트에 문법 오류가 없다",
+          arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh", "scripts/build-app.sh"])
     func scriptsHaveValidSyntax(_ relativePath: String) throws {
         let path = RepositoryLayout.root.appendingPathComponent(relativePath).path
         let result = try run(["/bin/bash", "-n", path])
@@ -87,14 +88,14 @@ struct ShellScriptTests {
 
         // 설정 디렉터리·파일 모두 root 외에는 쓸 수 없어야 한다.
         #expect(install.contains("install -d -o root -g wheel -m 0755 \"$CONFIG_DIR\""))
-        #expect(install.contains("install -o root -g wheel -m 0644 \"$REPO_ROOT/config.example.json\" \"$CONFIG_PATH\""))
+        #expect(install.contains("install -o root -g wheel -m 0644 \"$SOURCE_CONFIG_EXAMPLE\" \"$CONFIG_PATH\""))
         // 예전 버전이 남긴 root:admin 0664 를 그대로 두면 admin 그룹이 그대로 쓸 수 있다.
         #expect(install.contains("chown root:wheel \"$CONFIG_PATH\""))
         #expect(install.contains("chmod 0644 \"$CONFIG_PATH\""))
         #expect(!install.contains("-g admin"))
 
         // save-config 는 설치하되, sudoers 규칙에는 들어가지 않아야 한다.
-        #expect(install.contains("install -o root -g wheel -m 0755 \"$REPO_ROOT/scripts/save-config\" \"$SAVE_CONFIG_PATH\""))
+        #expect(install.contains("install -o root -g wheel -m 0755 \"$SOURCE_SAVE_CONFIG\" \"$SAVE_CONFIG_PATH\""))
         let result = try run(["/bin/bash", RepositoryLayout.root.appendingPathComponent("scripts/install.sh").path, "--dry-run"])
         #expect(result.succeeded)
         let sudoersBlock = result.standardOutput
@@ -115,6 +116,34 @@ struct ShellScriptTests {
         #expect(script.contains("8#0022"))
         #expect(!script.contains("eval "))
         #expect(script.contains("assert_self_is_safe"))
+    }
+
+    /// 설치·제거 스크립트도 root 로 실행된다 — 앱의 [설치]·[제거] 버튼이 그 길이다.
+    /// 물려받은 PATH 로 도구를 찾거나, 남이 고칠 수 있는 자리의 내용을 root 로 돌리지 않는다.
+    @Test("설치·제거 스크립트도 root 실행을 전제한 규칙을 지킨다",
+          arguments: ["scripts/install.sh", "scripts/uninstall.sh"])
+    func installerScriptsAreSafeAsRoot(_ relativePath: String) throws {
+        let script = try read(relativePath)
+        #expect(script.contains("set -euo pipefail"))
+        #expect(script.contains("PATH=/usr/sbin:/usr/bin:/sbin:/bin"))
+        #expect(script.contains("8#0022"))
+        #expect(!script.contains("eval "))
+        // root 로 들어오면 자기 자리부터 확인한다.
+        #expect(script.contains("assert_self_is_safe"))
+        // 앱이 부를 때 대상 계정을 넘겨야 한다. 없으면 root 앞으로 규칙을 적거나 root 의 홈을 뒤진다.
+        #expect(script.contains("--user"))
+        #expect(script.contains("USER_OVERRIDE"))
+    }
+
+    /// 레포에서 실행하든 앱 번들 안에서 실행하든 **같은 파일**이 같은 결과를 내야 한다.
+    @Test("install.sh 는 설치할 원본을 자기 위치 기준으로 찾는다")
+    func installResolvesSourcesRelativeToItself() throws {
+        let install = try read("scripts/install.sh")
+        #expect(install.contains("SCRIPT_DIR=$(cd \"$(dirname \"$0\")\" && pwd -P)"))
+        #expect(install.contains("SOURCE_APPLY=\"$SCRIPT_DIR/apply\""))
+        #expect(install.contains("SOURCE_SAVE_CONFIG=\"$SCRIPT_DIR/save-config\""))
+        // 레포 루트를 기준으로 삼으면 번들 안에서는 파일을 찾지 못한다.
+        #expect(!install.contains("REPO_ROOT"))
     }
 
     /// 검사한 파일과 실제로 파싱하는 파일이 같아야 한다.
@@ -147,14 +176,14 @@ struct ShellScriptTests {
         // 검증 실패 시 설치하지 않고 중단하는 경로가 있어야 한다.
         #expect(install.contains("sudoers 파일을 설치하지 않았습니다"))
         // 설치 후 전체 검증이 실패하면 되돌린다.
-        #expect(install.contains("sudo rm -f \"$SUDOERS_PATH\""))
+        #expect(install.contains("run_privileged /bin/rm -f \"$SUDOERS_PATH\""))
     }
 
     @Test("권한 스크립트를 root:wheel 0755 로 놓는다")
     func installUsesRootOwnedPermissions() throws {
         let install = try read("scripts/install.sh")
         #expect(install.contains("install -d -o root -g wheel -m 0755 \"$LIBEXEC_DIR\""))
-        #expect(install.contains("install -o root -g wheel -m 0755 \"$REPO_ROOT/scripts/apply\" \"$APPLY_PATH\""))
+        #expect(install.contains("install -o root -g wheel -m 0755 \"$SOURCE_APPLY\" \"$APPLY_PATH\""))
         #expect(install.contains("install -o root -g wheel -m 0440 \"$SUDOERS_TEMP\" \"$SUDOERS_PATH\""))
     }
 

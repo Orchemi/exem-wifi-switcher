@@ -521,6 +521,77 @@ else
     t_fail "Homebrew 감지 경로가 없습니다"
 fi
 
+t_section "install.sh — 앱에서 부르는 길"
+
+# 앱은 관리자 인증을 거쳐 root 로 이 스크립트를 부른다. 그 자리에서는 규칙을 적을 계정을
+# 알 수 없으므로 --user 로 받는다. 그 인자가 곧 sudoers 에 들어가므로 검사가 헐거우면 안 된다.
+"$REPO_ROOT/scripts/install.sh" --user >/dev/null 2>&1
+t_equals "1" "$?" "--user 뒤에 값이 없음"
+"$REPO_ROOT/scripts/install.sh" --dry-run --user 'bad name' >/dev/null 2>&1
+t_equals "1" "$?" "계정 이름에 공백"
+"$REPO_ROOT/scripts/install.sh" --dry-run --user 'x;id' >/dev/null 2>&1
+t_equals "1" "$?" "계정 이름에 셸 메타문자"
+"$REPO_ROOT/scripts/install.sh" --dry-run --user 'no-such-user-exem-test' >/dev/null 2>&1
+t_equals "1" "$?" "없는 계정"
+# 시스템 계정 앞으로 무암호 규칙을 적지 않는다.
+"$REPO_ROOT/scripts/install.sh" --dry-run --user root >/dev/null 2>&1
+t_equals "1" "$?" "로그인 계정이 아닌 대상"
+
+# --yes 는 확인 입력을 건너뛴다. dry-run 과 함께 써도 아무것도 바꾸지 않는다.
+"$REPO_ROOT/scripts/install.sh" --dry-run --yes >/dev/null 2>&1
+t_equals "0" "$?" "--yes 와 --dry-run"
+
+t_section "install.sh — 번들 안에서도 같은 코드가 돈다"
+
+# 앱 번들은 레포 구조가 아니다. 설치할 원본을 **스크립트 자기 위치** 기준으로 찾지 못하면
+# 앱에서 누른 [설치] 는 파일을 못 찾고 멈춘다. 레포 없이 같은 배치를 만들어 확인한다.
+BUNDLE_LIKE="$WORK_DIR/Bundle.app/Contents/Resources/scripts"
+mkdir -p "$BUNDLE_LIKE"
+for file in install.sh uninstall.sh apply save-config; do
+    install -m 0755 "$REPO_ROOT/scripts/$file" "$BUNDLE_LIKE/$file"
+done
+install -m 0644 "$REPO_ROOT/config.example.json" "$BUNDLE_LIKE/config.example.json"
+
+bundle_output=$("$BUNDLE_LIKE/install.sh" --dry-run --user "$(id -un)" 2>&1)
+t_equals "0" "$?" "번들 배치에서 install.sh --dry-run"
+case "$bundle_output" in
+    *"$BUNDLE_LIKE"*) t_pass ;;
+    *) t_fail "번들 안 스크립트가 자기 자리를 설치 원본으로 쓰지 않습니다" ;;
+esac
+case "$bundle_output" in
+    *"visudo -c 문법 검증 통과"*) t_pass ;;
+    *) t_fail "번들 배치에서 sudoers 검증까지 가지 못했습니다" ;;
+esac
+
+# 앱 번들은 사용자가 쓸 수 있는 자리에 있다. 최소한 **다른 사용자**가 갈아 끼울 수 있는
+# 상태라면 root 로 실행할 내용으로 받아들이지 않는다.
+chmod 0775 "$BUNDLE_LIKE/apply"
+"$BUNDLE_LIKE/install.sh" --dry-run --user "$(id -un)" >/dev/null 2>&1
+t_equals "1" "$?" "그룹 쓰기가 열린 원본 거부"
+chmod 0755 "$BUNDLE_LIKE/apply"
+
+# uninstall.sh 도 같은 길로 들어온다.
+uninstall_bundle_output=$("$BUNDLE_LIKE/uninstall.sh" --dry-run --user "$(id -un)" --skip-running-app 2>&1)
+t_equals "0" "$?" "번들 배치에서 uninstall.sh --dry-run"
+case "$uninstall_bundle_output" in
+    *"종료하지 않습니다"*) t_pass ;;
+    *) t_fail "--skip-running-app 이 앱을 종료하지 않는다고 알리지 않습니다" ;;
+esac
+"$REPO_ROOT/scripts/uninstall.sh" --dry-run --user 'bad name' >/dev/null 2>&1
+t_equals "1" "$?" "uninstall 계정 이름 검사"
+
+# 사용자 쪽 흔적(로그인 항목·앱 설정값)은 root 의 홈이 아니라 대상 계정의 홈에서 찾아야 한다.
+if grep -q 'launchctl bootout "gui/\$TARGET_UID/' "$REPO_ROOT/scripts/uninstall.sh"; then
+    t_pass
+else
+    t_fail "uninstall 이 대상 계정의 GUI 도메인을 쓰지 않습니다 (root 로 실행하면 남의 도메인을 봅니다)"
+fi
+if grep -q 'run_as_target_user tccutil reset Location' "$REPO_ROOT/scripts/uninstall.sh"; then
+    t_pass
+else
+    t_fail "uninstall 이 위치 권한 기록을 대상 계정으로 지우지 않습니다"
+fi
+
 t_section "save-config"
 
 # 저장 경로도 root 로 도는 스크립트다. apply 와 같은 원칙을 지켜야 한다.
