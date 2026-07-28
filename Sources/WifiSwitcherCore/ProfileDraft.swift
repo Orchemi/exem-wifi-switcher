@@ -12,12 +12,19 @@ public struct ManualProfileDraft: Equatable, Sendable {
     public var router: String
     /// 사용자가 적은 원문. 쉼표·공백·줄바꿈 어느 쪽으로 나눠도 받는다.
     public var dns: String
+    /// 이 프로필을 쓸 Wi-Fi 이름. 여럿이면 쉼표로 잇는다 (사내 AP 가 하나라는 법이 없다).
+    ///
+    /// **이 값이 비면 자동 전환이 이 프로필을 고르지 못한다** — 어느 Wi-Fi 에서 쓸지 모르니
+    /// 기본 프로필(DHCP)로 떨어진다. 값은 다 채워 놓고 이 칸만 비면, 사내에 앉아 있는데
+    /// 자동 전환이 고정 IP 를 DHCP 로 되돌리는 일이 벌어진다.
+    public var ssids: String
 
-    public init(ip: String = "", subnet: String = "", router: String = "", dns: String = "") {
+    public init(ip: String = "", subnet: String = "", router: String = "", dns: String = "", ssids: String = "") {
         self.ip = ip
         self.subnet = subnet
         self.router = router
         self.dns = dns
+        self.ssids = ssids
     }
 
     /// 현재 구성에서 초안을 만든다.
@@ -28,7 +35,12 @@ public struct ManualProfileDraft: Equatable, Sendable {
     ///
     /// DNS 를 **읽지 못했으면 칸을 비워 둔다.** 읽지 못한 것을 "없음" 으로 채워 넣으면
     /// 사용자가 그 빈 값을 자기 설정인 줄 알고 저장한다. 창은 그 사실을 따로 알린다.
-    public static func from(_ info: InterfaceInfo, dns: DNSReading) -> ManualProfileDraft? {
+    ///
+    /// - Parameter ssid: 지금 접속한 Wi-Fi 이름. **수동 구성일 때만** 초안에 넣는다.
+    ///   지금 이 자리에서 고정 IP 로 돌고 있다는 것은 여기가 그 프로필을 쓰는 자리라는 뜻이다.
+    ///   (DHCP 로 도는 자리에서 지금 Wi-Fi 이름을 넣으면 집·카페 이름이 사내 프로필에 박힌다 —
+    ///   그 순간 그 자리에서 사내 고정 IP 가 걸린다. 읽지 못했을 때도 마찬가지로 비워 둔다)
+    public static func from(_ info: InterfaceInfo, dns: DNSReading, ssid: SSIDReading) -> ManualProfileDraft? {
         guard info.configMethod == .manual,
               let ip = info.ip, let subnet = info.subnet, let router = info.router
         else { return nil }
@@ -36,8 +48,19 @@ public struct ManualProfileDraft: Equatable, Sendable {
             ip: ip.description,
             subnet: subnet.description,
             router: router.description,
-            dns: dns.servers.joined(separator: ", ")
+            dns: dns.servers.joined(separator: ", "),
+            ssids: ssid.name ?? ""
         )
+    }
+
+    /// 저장할 Wi-Fi 이름 목록. 쉼표로 끊고 앞뒤 공백만 턴다.
+    ///
+    /// **공백으로 끊지 않는다** — SSID 에는 공백이 들어갈 수 있어서(`OFFICE WIFI`)
+    /// DNS 처럼 나누면 이름 하나가 둘로 쪼개진다.
+    public var ssidList: [String] {
+        ssids.components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 }
 
@@ -47,6 +70,7 @@ public enum DraftField: Equatable, Sendable {
     case subnet
     case router
     case dns
+    case ssids
     /// 특정 칸으로 좁힐 수 없는 문제
     case form
 }
@@ -82,7 +106,10 @@ public struct DraftIssues: Error, Equatable, Sendable, CustomStringConvertible {
 extension ManualProfileDraft {
 
     /// 입력값으로 고정 IP 프로필을 만든다. 실패하면 칸별 사유를 전부 돌려준다.
-    public func makeProfile(name: String, label: String?, ssids: [String]) -> Result<NetworkProfile, DraftIssues> {
+    ///
+    /// Wi-Fi 이름도 **초안이 들고 있는 값**을 쓴다 — 화면이 채운 칸과 저장되는 값이
+    /// 갈라질 자리를 만들지 않는다.
+    public func makeProfile(name: String, label: String?) -> Result<NetworkProfile, DraftIssues> {
         let ip = ManualProfileDraft.trim(ip)
         let subnet = ManualProfileDraft.trim(subnet)
         let router = ManualProfileDraft.trim(router)
@@ -118,9 +145,10 @@ extension ManualProfileDraft {
         guard issues.isEmpty else { return .failure(DraftIssues(issues)) }
 
         // 4) 값끼리의 관계는 Phase 1 의 검증을 그대로 쓴다.
+        //    Wi-Fi 이름 규칙(길이·제어문자·중복)도 여기서 함께 걸린다 — 따로 만들지 않는다.
         let profile = NetworkProfile(
             name: name, mode: .manual, ip: ip, subnet: subnet, router: router,
-            dns: servers, ssids: ssids, label: label
+            dns: servers, ssids: ssidList, label: label
         )
         let errors = profile.validate()
         guard errors.isEmpty else {
@@ -167,6 +195,8 @@ extension ManualProfileDraft {
             return DraftIssue(field: .dns, message: "\(error)")
         case .missingDNS:
             return DraftIssue(field: .dns, message: emptyDNSHint)
+        case .invalidSSID(_, let reason):
+            return DraftIssue(field: .ssids, message: "Wi-Fi 이름을 쓸 수 없습니다 — \(reason)")
         default:
             return DraftIssue(field: .form, message: "\(error)")
         }
@@ -218,15 +248,15 @@ public enum OnboardingSetup {
 
     /// 온보딩 결과를 설정으로 조립한다.
     ///
-    /// 이미 있던 설정은 최대한 보존한다 — SSID 목록(Phase 3 가 채운다)과, 사용자가 손으로
-    /// 추가했을 수 있는 다른 프로필은 그대로 둔다. 덮어쓰는 것은 고정 IP 프로필의 주소뿐이다.
+    /// 이미 있던 설정에서 **사용자가 손으로 추가했을 수 있는 다른 프로필은 그대로 둔다.**
+    /// 덮어쓰는 것은 고정 IP 프로필 하나뿐이다.
+    ///
+    /// **고정 IP 프로필은 넘어온 값을 그대로 쓴다 — Wi-Fi 이름도 마찬가지다.**
+    /// 예전에는 넘어온 목록이 비면 옛 목록을 되살렸다. 화면에 그 칸이 없던 시절의 보호막인데,
+    /// 이제 칸이 있으므로 그 되살리기는 **사용자가 지운 이름을 되돌려 놓는 짓**이 된다.
+    /// 지우고 저장했는데 그대로면 그것은 고장이다.
     public static func makeConfig(service: String, office: NetworkProfile, existing: AppConfig?) -> AppConfig {
         var profiles = existing?.profiles ?? []
-
-        var office = office
-        if let previous = profiles.first(where: { $0.name == office.name }) {
-            if office.ssids.isEmpty { office.ssids = previous.ssids }
-        }
 
         if let index = profiles.firstIndex(where: { $0.name == office.name }) {
             profiles[index] = office

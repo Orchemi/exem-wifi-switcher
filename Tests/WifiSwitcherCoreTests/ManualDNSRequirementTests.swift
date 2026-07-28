@@ -53,7 +53,7 @@ struct ManualDNSRequirementTests {
     @Test("온보딩에서 DNS 칸을 비우면 그 칸에 사유를 붙인다")
     func draftReportsEmptyDNSOnItsOwnField() {
         let draft = ManualProfileDraft(ip: "192.0.2.10", subnet: "255.255.255.0", router: "192.0.2.1", dns: "")
-        guard case .failure(let issues) = draft.makeProfile(name: "office", label: nil, ssids: []) else {
+        guard case .failure(let issues) = draft.makeProfile(name: "office", label: nil) else {
             Issue.record("DNS 가 비었으므로 실패해야 한다")
             return
         }
@@ -65,7 +65,7 @@ struct ManualDNSRequirementTests {
     @Test("공백만 적은 것도 비운 것으로 본다")
     func treatsWhitespaceAsEmpty() {
         let draft = ManualProfileDraft(ip: "192.0.2.10", subnet: "255.255.255.0", router: "192.0.2.1", dns: "   \n ")
-        guard case .failure(let issues) = draft.makeProfile(name: "office", label: nil, ssids: []) else {
+        guard case .failure(let issues) = draft.makeProfile(name: "office", label: nil) else {
             Issue.record("공백뿐인 DNS 는 비어 있는 것과 같다")
             return
         }
@@ -122,7 +122,7 @@ struct DNSReadingTests {
             subnet: SubnetMask("255.255.255.0"),
             router: IPv4Address("192.0.2.1")
         )
-        let draft = ManualProfileDraft.from(info, dns: .unreadable("조회 실패"))
+        let draft = ManualProfileDraft.from(info, dns: .unreadable("조회 실패"), ssid: .connected("EXAMPLE-AP"))
         // 주소는 제안하되 DNS 칸은 비워둔다. 그리고 그 사실을 창이 알린다.
         #expect(draft?.dns == "")
         #expect(draft?.ip == "192.0.2.10")

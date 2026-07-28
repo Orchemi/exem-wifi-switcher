@@ -27,6 +27,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     // 이 창이 편집하는 것은 **고정 IP(office) 프로필**이다. 거기에는 DNS 를 알려줄 DHCP 가 없으므로
     // 비워 두면 이름 해석이 통째로 끊긴다 — 안내 문구가 비우도록 유도하면 안 된다.
     private let dnsField = SettingsWindowController.makeField(placeholder: "필수 · 사내 DNS 서버를 쉼표로 구분 (예: 192.0.2.53, 192.0.2.54)")
+    // **이 칸이 자동 전환의 방아쇠다.** 여기 적힌 이름의 Wi-Fi 에 붙으면 위 값들이 적용된다.
+    // 비워 두면 값이 다 맞아도 자동 전환은 이 프로필을 고르지 못한다 — 그 사실을 자리표시자에 적는다.
+    private let ssidField = SettingsWindowController.makeField(
+        placeholder: "비우면 자동 전환 안 함 · 여럿이면 쉼표로 구분"
+    )
 
     private var errorLabels: [DraftField: NSTextField] = [:]
     private var errorRows: [DraftField: NSGridRow] = [:]
@@ -141,17 +146,30 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         // 값 — 이미 저장된 프로필이 있으면 그 값을, 없으면 현재 구성에서 제안한다.
         let existingOffice = observation.readyConfig?.profiles.first { $0.mode == .manual }
-        let suggestion = observation.interface.flatMap { ManualProfileDraft.from($0, dns: observation.dnsServers) }
+        let suggestion = observation.interface.flatMap {
+            ManualProfileDraft.from($0, dns: observation.dnsServers, ssid: observation.ssid)
+        }
 
         if let existingOffice, let ip = existingOffice.ip, let subnet = existingOffice.subnet, let router = existingOffice.router {
-            fill(ManualProfileDraft(ip: ip, subnet: subnet, router: router, dns: existingOffice.dns.joined(separator: ", ")))
+            // 저장해 둔 값이 언제나 이긴다 — 사용자가 고쳐 둔 Wi-Fi 이름을 지금 붙어 있는 이름으로 덮지 않는다.
+            fill(ManualProfileDraft(
+                ip: ip, subnet: subnet, router: router,
+                dns: existingOffice.dns.joined(separator: ", "),
+                ssids: existingOffice.ssids.joined(separator: ", ")
+            ))
             introLabel.stringValue = "사내에서 쓰는 고정 IP 값입니다. 바꾼 뒤 저장하면 다음 전환부터 적용됩니다."
         } else if let suggestion {
             fill(suggestion)
-            introLabel.stringValue = "지금 이 Mac 은 고정 IP 로 연결돼 있습니다. 아래 값을 사내 프로필로 저장할 수 있습니다."
+            // 지금 이 자리가 곧 사내다 — Wi-Fi 이름까지 채워졌으면 [저장] 한 번으로 자동 전환까지 선다.
+            introLabel.stringValue = suggestion.ssids.isEmpty
+                ? "지금 이 Mac 은 고정 IP 로 연결돼 있습니다. 아래 값을 사내 프로필로 저장할 수 있습니다."
+                : "지금 이 Mac 은 고정 IP 로 연결돼 있습니다. 지금 붙어 있는 Wi-Fi 와 그 값들을 사내 프로필로 저장합니다."
         } else {
             fill(ManualProfileDraft())
-            introLabel.stringValue = "지금은 고정 IP 구성이 아닙니다. 사내에서 쓰는 IP·서브넷·라우터를 입력하세요."
+            // 지금은 DHCP 다. 사내 값도, 사내 Wi-Fi 이름도 여기서는 알 수 없다 —
+            // 지금 붙어 있는 Wi-Fi(집·카페일 수 있다)를 사내 것으로 적어 두면 그 자리에서 고정 IP 가 걸린다.
+            introLabel.stringValue = "지금은 고정 IP 구성이 아닙니다. "
+                + "사내에서 쓰는 Wi-Fi 이름과 IP·서브넷·라우터를 입력하세요."
         }
 
         if case .unusable(_, let reason) = observation.config {
@@ -164,6 +182,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         // 같은 말을 두 자리에서 하면 어느 쪽이 최신인지 알 수 없게 된다.
         clearIssues()
         showDNSReadFailureIfNeeded()
+        showSSIDReadFailureIfNeeded()
+    }
+
+    /// 지금 Wi-Fi 이름을 **읽지 못해** 칸을 못 채웠으면 그 사실과 풀 방법을 남긴다.
+    ///
+    /// 조용히 빈 칸으로 두면 사용자는 원래 안 쓰는 칸인 줄 안다. 그대로 저장하면 값은 다 맞는데
+    /// 자동 전환만 영영 걸리지 않는다 — 가장 알아채기 어려운 고장이다.
+    private func showSSIDReadFailureIfNeeded() {
+        guard ssidField.stringValue.isEmpty,
+              observation.ssid.isPermissionProblem,
+              let label = errorLabels[.ssids]
+        else { return }
+        label.stringValue = "위치 권한이 없어 지금 Wi-Fi 이름을 읽지 못했습니다. "
+            + "허용하면 이 칸이 자동으로 채워집니다 (아래 권한 섹션). 직접 입력해도 됩니다."
+        errorRows[.ssids]?.isHidden = false
     }
 
     /// 현재 DNS 설정을 **읽지 못했으면** 그 사실을 DNS 칸에 남긴다.
@@ -184,6 +217,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         subnetField.stringValue = draft.subnet
         routerField.stringValue = draft.router
         dnsField.stringValue = draft.dns
+        ssidField.stringValue = draft.ssids
     }
 
     private var draft: ManualProfileDraft {
@@ -191,7 +225,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             ip: ipField.stringValue,
             subnet: subnetField.stringValue,
             router: routerField.stringValue,
-            dns: dnsField.stringValue
+            dns: dnsField.stringValue,
+            ssids: ssidField.stringValue
         )
     }
 
@@ -478,11 +513,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         clearIssues()
 
         let existing = observation.readyConfig
-        let ssids = existing?.profile(named: OnboardingSetup.officeProfileName)?.ssids ?? []
+        // Wi-Fi 이름은 칸에 적힌 것만 쓴다 — 지운 이름이 옛 설정에서 되살아나지 않게.
         let result = draft.makeProfile(
             name: OnboardingSetup.officeProfileName,
-            label: OnboardingSetup.officeProfileLabel,
-            ssids: ssids
+            label: OnboardingSetup.officeProfileLabel
         )
 
         let office: NetworkProfile
@@ -594,6 +628,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case .subnet: return subnetField
         case .router: return routerField
         case .dns: return dnsField
+        case .ssids: return ssidField
         case .form: return nil
         }
     }
@@ -608,6 +643,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         grid.rowAlignment = .firstBaseline
 
         addRow(to: grid, title: "네트워크 서비스", control: servicePopUp, field: nil)
+        // 아래 값들이 **언제** 적용되는지를 먼저 정한다. 순서에 뜻이 있다 — 조건이 위, 그 조건에서 쓸 값이 아래.
+        addRow(to: grid, title: "사내 Wi-Fi 이름", control: ssidField, field: .ssids)
         addRow(to: grid, title: "IP 주소", control: ipField, field: .ip)
         addRow(to: grid, title: "서브넷 마스크", control: subnetField, field: .subnet)
         addRow(to: grid, title: "라우터", control: routerField, field: .router)
