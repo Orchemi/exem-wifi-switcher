@@ -473,8 +473,17 @@ esac
 
 # 설정 파일은 root:wheel 0644 여야 한다 — 사용자 권한으로 고칠 수 있으면
 # 무암호 apply 를 통해 root 의 networksetup 인자가 통째로 조작된다.
+#
+# **길이 둘이고, 어느 길로 가는지는 이 기계에 설정이 이미 있느냐가 정한다.**
+#   - 없으면: 예시를 `install -o root -g wheel -m 0644` 로 복사한다
+#   - 있으면: 내용은 남기고 `chown root:wheel` + `chmod 0644` 로 소유·권한만 맞춘다
+#
+# 앞의 것만 보면, **이 도구를 설치해 둔 기계에서는 테스트가 실패한다** — 실제로 그렇게 됐다.
+# 코드가 잘못돼서가 아니라 기계 상태가 달라서 나는 실패는 신호가 아니라 소음이다.
+# 두 길 모두 확인하되, 지킬 것(root:wheel 0644)은 어느 길에서도 똑같이 요구한다.
 case "$install_output" in
     *"install -o root -g wheel -m 0644"*) t_pass ;;
+    *"chown root:wheel"*"chmod 0644"*) t_pass ;;
     *) t_fail "설정 파일을 root:wheel 0644 로 놓지 않습니다" ;;
 esac
 case "$install_output" in
