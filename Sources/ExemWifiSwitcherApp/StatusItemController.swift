@@ -364,6 +364,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             menu.addItem(retry)
         }
 
+        // 이 두 항목은 누르면 메뉴가 닫히고 시스템 설정으로 넘어간다 — 그 뒤에 무엇을 해야 하는지
+        // 말할 자리가 메뉴에는 없다. 그래서 **누르기 전에** 툴팁으로 그 한 문장을 붙여 둔다.
+        // 문장은 설정 창·알림과 같은 자리에서 온다 (`SystemSettingsPane.openGuidance`).
         if model.needsLocationPermission {
             let item = NSMenuItem(
                 title: "위치 권한 설정 열기…",
@@ -371,12 +374,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                 keyEquivalent: ""
             )
             item.target = self
+            item.toolTip = SystemSettingsPane.locationServices.openGuidance
             menu.addItem(item)
         }
 
         if model.needsNotificationPermission {
             let item = NSMenuItem(title: "알림 설정 열기…", action: #selector(openNotificationSettings), keyEquivalent: "")
             item.target = self
+            item.toolTip = SystemSettingsPane.notifications.openGuidance
             menu.addItem(item)
         }
     }

@@ -273,6 +273,12 @@ struct PermissionReportTests {
             } else {
                 let hint = pane.listHint
                 #expect(hint?.contains(InstallPaths.appName) == true, "\(pane) 이 찾을 이름을 말하지 않는다")
+                // 이름만 알려주고 목록 앞에 세워 두면 결국 처음부터 훑게 된다.
+                // 지목할 수 없는 화면에서 줄 수 있는 단서는 **어디쯤을 보면 되는가** 하나뿐이다.
+                #expect(
+                    hint?.contains(SystemSettingsPane.listOrder) == true,
+                    "\(pane) 이 어디쯤을 봐야 하는지 말하지 않는다"
+                )
                 #expect(pane.openGuidance.contains(hint ?? "\u{0}"))
             }
             // 어느 쪽이든 갈 자리는 반드시 적힌다.
