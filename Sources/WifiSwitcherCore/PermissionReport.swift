@@ -54,36 +54,55 @@ public enum PermissionState: Equatable, Sendable {
 }
 
 /// 시스템 설정에서 열어야 하는 자리.
+///
+/// **주소는 여기 한 곳에만 있다.** 메뉴·설정 창·알림 문구가 모두 이 타입을 거친다 —
+/// 같은 주소를 여러 자리에 적어 두면 한쪽만 고쳐진 채 조용히 갈라진다.
 public enum SystemSettingsPane: Equatable, Sendable {
     case locationServices
     case notifications
+    /// 로그인 시 자동 실행. 앱이 놓은 LaunchAgent 를 **macOS 가 여기서 꺼 버릴 수 있다.**
+    case loginItems
 
     /// 해당 화면으로 바로 가는 딥링크.
     ///
-    /// 옛 환경설정 식별자(`com.apple.preference.*`)를 그대로 쓴다. 시스템 설정이 갈린 뒤에도
-    /// 각 화면이 `legacyBundleIdentifier` 로 이 이름을 달고 있어 macOS 26 에서도 그대로 열린다
-    /// (실측: 알림 → '알림' 창, 위치 → '위치 서비스' 창).
+    /// 권한 두 곳은 옛 환경설정 식별자(`com.apple.preference.*`)를 그대로 쓴다. 시스템 설정이
+    /// 갈린 뒤에도 각 화면이 `legacyBundleIdentifier` 로 이 이름을 달고 있어 지금도 그대로 열린다.
+    /// 로그인 항목은 옛 이름이 없어 새 확장 식별자를 쓴다.
+    ///
+    /// 셋 다 macOS 26.5 에서 창 제목으로 확인했다 —
+    /// 알림 → '알림' · 위치 → '위치 서비스' · 로그인 항목 → '로그인 항목 및 확장 프로그램'.
     public var url: String {
         switch self {
         case .locationServices:
             return "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices"
         case .notifications:
             return "x-apple.systempreferences:com.apple.preference.notifications"
+        case .loginItems:
+            return "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
         }
+    }
+
+    /// 그 화면에서 **우리 앱을 바로 지목할 수 있는가.**
+    ///
+    /// 알림만 된다. 앱마다 자기 화면이 따로 있어 `?id=` 로 그 화면을 곧장 열 수 있다.
+    /// 나머지 둘은 목록 하나가 화면 전체라 지목할 자리가 없다.
+    public var revealsApp: Bool {
+        if case .notifications = self { return true }
+        return false
     }
 
     /// 우리 앱의 줄을 펴 놓고 여는 딥링크.
     ///
     /// **알림 화면은 설치된 앱이 전부 늘어선 긴 목록이다.** 거기에 떨어뜨려 놓고 이름을 찾아
     /// 스크롤하게 두면, 권한을 켜라고 안내해 놓고 정작 그 자리는 알아서 찾으라는 말이 된다.
-    /// `?id=<번들 식별자>` 를 붙이면 그 앱의 화면이 바로 열린다 (macOS 26 에서 확인).
+    /// `?id=<번들 식별자>` 를 붙이면 그 앱의 화면이 바로 열린다 (macOS 26.5 에서 확인 —
+    /// 창 제목이 앱 이름으로 바뀌고 목록을 스크롤하지 않아도 된다).
     ///
-    /// 위치 서비스에는 이런 손잡이가 없다 — 목록 자체가 화면이라 그대로 연다.
+    /// **다른 화면에는 붙이지 않는다.** 위치 서비스에 질의를 덧붙이면 앵커가 깨져
+    /// 상위 '개인정보 보호 및 보안' 으로 떨어지는 것을 실측했다 — 지금보다 나빠진다.
     /// 식별자를 모르는 경우(번들 밖 실행)에도 화면까지는 열어 준다.
     public func url(revealing bundleIdentifier: String?) -> String {
-        guard case .notifications = self,
-              let bundleIdentifier, !bundleIdentifier.isEmpty
-        else { return url }
+        guard revealsApp, let bundleIdentifier, !bundleIdentifier.isEmpty else { return url }
         return "\(url)?id=\(bundleIdentifier)"
     }
 
@@ -92,7 +111,24 @@ public enum SystemSettingsPane: Equatable, Sendable {
         switch self {
         case .locationServices: return "시스템 설정 > 개인정보 보호 및 보안 > 위치 서비스"
         case .notifications: return "시스템 설정 > 알림"
+        case .loginItems: return "시스템 설정 > 일반 > 로그인 항목 및 확장 프로그램"
         }
+    }
+
+    /// 목록만 열리는 화면에서 **무엇을 찾아야 하는지.**
+    ///
+    /// 지목할 수 없다는 사실을 인정하고 이름을 알려준다. 목록 앞에 사용자를 세워 두고
+    /// 아무 말도 하지 않는 것은 절반만 안내한 것이다.
+    public var listHint: String? {
+        revealsApp ? nil : "목록에서 '\(InstallPaths.appName)' 를 찾으세요"
+    }
+
+    /// "…에서 허용하세요" 한 마디. 지목할 수 없는 화면이면 찾을 이름까지 붙는다.
+    ///
+    /// 설정 창과 `--diagnose` 가 같은 문장을 쓴다 — 두 자리에서 다 맞는 말이어야 한다.
+    public var openGuidance: String {
+        guard let listHint else { return "\(displayPath)에서 허용하세요." }
+        return "\(displayPath)에서 허용하세요 — \(listHint)."
     }
 }
 
@@ -327,7 +363,7 @@ public struct PermissionReport: Equatable, Sendable {
                 state: .actionNeeded,
                 status: "거부됨",
                 advice: "Wi-Fi 이름을 읽지 못해 자동 전환이 멈춰 있습니다. "
-                    + "\(SystemSettingsPane.locationServices.displayPath)에서 허용하세요.",
+                    + SystemSettingsPane.locationServices.openGuidance,
                 remedy: .openSettings(.locationServices)
             )
         case .notDetermined:
@@ -336,7 +372,7 @@ public struct PermissionReport: Equatable, Sendable {
                 state: .undetermined,
                 status: "아직 묻지 않음",
                 advice: "자동 전환을 켜면 승인 창이 뜹니다. 창을 닫았다면 "
-                    + "\(SystemSettingsPane.locationServices.displayPath)에서 허용하세요.",
+                    + SystemSettingsPane.locationServices.openGuidance,
                 remedy: .openSettings(.locationServices)
             )
         }
@@ -360,7 +396,7 @@ public struct PermissionReport: Equatable, Sendable {
                 state: .actionNeeded,
                 status: "거부됨",
                 advice: "전환 알림이 뜨지 않아 전환 사실이 메뉴에만 남습니다. "
-                    + "\(SystemSettingsPane.notifications.displayPath)에서 허용하세요.",
+                    + SystemSettingsPane.notifications.openGuidance,
                 remedy: .openSettings(.notifications)
             )
         case .pending:

@@ -227,27 +227,69 @@ struct PermissionReportTests {
         #expect(denied.diagnosticText == "\(denied.status) — \(denied.advice ?? "")")
     }
 
+    /// 앱이 사용자를 보낼 수 있는 자리 전부. 새 화면을 추가하면 여기에도 넣어라 —
+    /// 아래 테스트들이 **빠짐없이** 도는 근거다.
+    private static let allPanes: [SystemSettingsPane] = [.locationServices, .notifications, .loginItems]
+
     @Test("시스템 설정 딥링크는 해당 화면을 가리킨다")
     func settingsPaneURLs() {
         #expect(SystemSettingsPane.locationServices.url.contains("Privacy_LocationServices"))
         #expect(SystemSettingsPane.notifications.url.contains("com.apple.preference.notifications"))
-        for pane in [SystemSettingsPane.locationServices, .notifications] {
+        #expect(SystemSettingsPane.loginItems.url.contains("LoginItems-Settings"))
+        for pane in Self.allPanes {
             #expect(pane.url.hasPrefix("x-apple.systempreferences:"))
+            // 글로 적은 자리도 함께 있어야 한다 — 딥링크가 열리지 않는 날의 유일한 안내다.
+            #expect(pane.displayPath.hasPrefix("시스템 설정 > "))
         }
     }
 
     @Test("알림 딥링크는 우리 앱의 줄을 펴고 연다")
     func notificationPaneRevealsApp() {
+        #expect(SystemSettingsPane.notifications.revealsApp)
         let revealed = SystemSettingsPane.notifications.url(revealing: "com.example.app")
         #expect(revealed == "\(SystemSettingsPane.notifications.url)?id=com.example.app")
 
         // 식별자를 모르면(번들 밖 실행) 화면까지는 연다 — 아무 데도 못 가는 것보다 낫다.
         #expect(SystemSettingsPane.notifications.url(revealing: nil) == SystemSettingsPane.notifications.url)
         #expect(SystemSettingsPane.notifications.url(revealing: "") == SystemSettingsPane.notifications.url)
+    }
 
-        // 위치 서비스는 목록 자체가 화면이라 붙일 것이 없다. 엉뚱한 질의를 달지 않는다.
-        #expect(SystemSettingsPane.locationServices.url(revealing: "com.example.app")
-            == SystemSettingsPane.locationServices.url)
+    @Test("지목할 수 없는 화면에는 질의를 붙이지 않는다")
+    func listPanesKeepTheirURLUntouched() {
+        // 위치 서비스에 질의를 덧붙이면 앵커가 깨져 상위 '개인정보 보호 및 보안' 으로 떨어진다(실측).
+        // 지목할 수 없는 화면은 주소를 **그대로** 두는 것이 최선이다.
+        for pane in Self.allPanes where !pane.revealsApp {
+            #expect(pane.url(revealing: "com.example.app") == pane.url, "\(pane) 주소에 질의가 붙었다")
+        }
+    }
+
+    @Test("목록만 열리는 화면은 무엇을 찾아야 하는지 알려준다")
+    func listPanesTellWhatToLookFor() {
+        for pane in Self.allPanes {
+            if pane.revealsApp {
+                // 그 앱의 화면이 바로 열리는데 "찾으세요" 라고 하면 없는 수고를 시키는 말이 된다.
+                #expect(pane.listHint == nil, "\(pane) 은 지목되는데 찾으라고 한다")
+                #expect(pane.openGuidance == "\(pane.displayPath)에서 허용하세요.")
+            } else {
+                let hint = pane.listHint
+                #expect(hint?.contains(InstallPaths.appName) == true, "\(pane) 이 찾을 이름을 말하지 않는다")
+                #expect(pane.openGuidance.contains(hint ?? "\u{0}"))
+            }
+            // 어느 쪽이든 갈 자리는 반드시 적힌다.
+            #expect(pane.openGuidance.contains(pane.displayPath))
+        }
+    }
+
+    @Test("권한 안내는 갈 자리와 찾을 이름을 함께 적는다")
+    func adviceCarriesGuidance() {
+        // 위치는 목록이 열리므로 이름까지, 알림은 앱 화면이 열리므로 자리까지만.
+        let location = item(.location, input(location: .denied))
+        #expect(location.advice?.contains(InstallPaths.appName) == true)
+        #expect(location.advice?.contains(SystemSettingsPane.locationServices.displayPath) == true)
+
+        let notification = item(.notification, input(notifications: .denied))
+        #expect(notification.advice?.contains(SystemSettingsPane.notifications.displayPath) == true)
+        #expect(notification.advice?.contains(InstallPaths.appName) == false)
     }
 
     @Test("여러 항목이 어긋나도 각자의 조치를 따로 낸다")
@@ -304,6 +346,15 @@ struct PermissionSourceParityTests {
                 "\(path) 가 시스템 설정 주소를 직접 들고 있다"
             )
         }
+    }
+
+    @Test("시스템 설정으로 가는 길을 문구로도 두 벌 적지 않는다")
+    func settingsPathsAreNotRetyped() throws {
+        // 알림 본문에는 누를 버튼이 없어 갈 자리를 글로 적는데, 그 글을 여기서 새로 쓰면
+        // 화면과 알림이 서로 다른 경로를 안내하게 된다 (`displayPath` 가 유일한 출처다).
+        let announcement = try source("Sources/WifiSwitcherCore/SwitchAnnouncement.swift")
+        #expect(!announcement.contains("시스템 설정 >"), "알림 문구가 설정 경로를 직접 들고 있다")
+        #expect(announcement.contains("SystemSettingsPane"), "알림 문구가 공용 안내를 쓰지 않는다")
     }
 
     /// 권한은 **앱 밖에서** 바뀐다. 그 사실을 알아채는 것은 값이 아니라 **다시 읽는 시점**이고,

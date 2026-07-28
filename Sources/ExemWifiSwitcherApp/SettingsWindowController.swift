@@ -32,6 +32,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var errorRows: [DraftField: NSGridRow] = [:]
 
     private let loginItemCheckbox = NSButton(checkboxWithTitle: "로그인 시 자동 실행", target: nil, action: nil)
+    /// 로그인 항목 화면으로 가는 손잡이. macOS 가 이 항목을 껐는지 확인하고 되돌릴 수 있는 유일한 자리다.
+    private let loginItemSettingsButton = NSButton(title: "로그인 항목 열기…", target: nil, action: nil)
     private let noticeLabel = SettingsWindowController.makeWrappingLabel(
         font: .systemFont(ofSize: NSFont.smallSystemFontSize),
         color: .secondaryLabelColor
@@ -273,9 +275,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case .install:
             beginInstaller(.install)
         case .openSettings(let pane):
-            // 알림은 우리 앱의 줄을 편 채로 연다 (`url(revealing:)`) — 긴 앱 목록에서 이름을 찾게 두지 않는다.
-            guard let url = URL(string: pane.url(revealing: Bundle.main.bundleIdentifier)) else { return }
-            NSWorkspace.shared.open(url)
+            open(pane)
         case .runCommand(let command):
             copyToPasteboard(command, confirmingOn: sender)
         }
@@ -283,6 +283,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func performUninstall() {
         beginInstaller(.uninstall)
+    }
+
+    @objc private func openLoginItemsSettings() {
+        open(.loginItems)
+    }
+
+    /// 시스템 설정의 해당 화면을 연다.
+    ///
+    /// 알림은 우리 앱의 줄을 편 채로 열린다 (`url(revealing:)`). 나머지는 목록이 열리므로,
+    /// 무엇을 찾아야 하는지는 각 항목의 안내 문구(`openGuidance`)가 미리 말해 둔다.
+    private func open(_ pane: SystemSettingsPane) {
+        guard let url = URL(string: pane.url(revealing: Bundle.main.bundleIdentifier)) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// 복사는 눈에 보이는 변화가 없다. 눌렀는데 아무 일도 없으면 안 된 줄 안다.
@@ -628,6 +641,24 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         loginItemCheckbox.target = self
         loginItemCheckbox.action = #selector(toggleLoginItem(_:))
 
+        // 이 체크상자는 `~/Library/LaunchAgents` 에 항목을 놓을 뿐이고, **켜고 끄는 최종 권한은
+        // macOS 에 있다** — 시스템 설정의 로그인 항목에서 꺼 버리면 로그인해도 뜨지 않는다.
+        // 앱은 그 상태를 읽을 수 없으므로(서명 인증서가 없어 `SMAppService` 를 못 쓴다)
+        // 체크상자는 계속 '켜짐' 으로 보인다. 확인하러 갈 자리를 옆에 둔다.
+        loginItemSettingsButton.bezelStyle = .rounded
+        loginItemSettingsButton.controlSize = .small
+        loginItemSettingsButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        loginItemSettingsButton.target = self
+        loginItemSettingsButton.action = #selector(openLoginItemsSettings)
+        // 그 화면도 목록이다 — 무엇을 찾아야 하는지 여기서 미리 말해 둔다.
+        loginItemSettingsButton.toolTip = SystemSettingsPane.loginItems.openGuidance
+
+        let loginItemRow = NSStackView(views: [loginItemCheckbox, loginItemSettingsButton, NSView()])
+        loginItemRow.orientation = .horizontal
+        loginItemRow.alignment = .centerY
+        loginItemRow.distribution = .fill
+        loginItemRow.spacing = Self.columnSpacing
+
         let cancelButton = NSButton(title: "취소", target: self, action: #selector(cancel))
         cancelButton.bezelStyle = .rounded
         cancelButton.keyEquivalent = "\u{1b}"
@@ -648,7 +679,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let stack = NSStackView(views: [
             introLabel, grid,
             separator, permissionHeader, permissionGrid,
-            permissionSeparator, loginItemCheckbox, noticeLabel, buttonRow,
+            permissionSeparator, loginItemRow, noticeLabel, buttonRow,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -656,7 +687,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         stack.setCustomSpacing(10, after: separator)
         stack.setCustomSpacing(10, after: permissionHeader)
         stack.setCustomSpacing(10, after: permissionSeparator)
-        stack.setCustomSpacing(6, after: loginItemCheckbox)
+        stack.setCustomSpacing(6, after: loginItemRow)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         let content = NSView()

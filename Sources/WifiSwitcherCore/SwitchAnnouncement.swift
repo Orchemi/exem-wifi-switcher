@@ -66,11 +66,16 @@ public enum SwitchAnnouncement {
     }
 
     /// 위치 권한이 없어 자동 전환이 성립하지 않는다. 조용히 멈춰 있는 것이 가장 나쁘다.
+    ///
+    /// **알림에는 누를 버튼이 없다.** 갈 자리를 글로 적는 수밖에 없고, 그 문구는
+    /// 설정 창·진단과 같은 자리(`SystemSettingsPane`)에서 가져온다 — 세 벌로 갈라지지 않게.
     public static func locationPermissionNeeded() -> Message {
         Message(
             title: "위치 권한 필요",
-            body: "Wi-Fi 이름을 읽지 못해 자동 전환이 멈춰 있습니다. "
-                + "시스템 설정 > 개인정보 보호 및 보안 > 위치 서비스에서 허용하세요."
+            body: shorten(
+                "Wi-Fi 이름을 읽지 못해 자동 전환이 멈춰 있습니다. "
+                    + SystemSettingsPane.locationServices.openGuidance
+            )
         )
     }
 
