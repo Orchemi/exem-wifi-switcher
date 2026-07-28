@@ -133,8 +133,9 @@ struct SetupChecklistTests {
         #expect(model.icon == .manual)
         #expect(model.canSwitch)
         #expect(!model.needsSetup)
-        // 딸린 줄도 할 일이 아니라 지금 값이다.
-        #expect(model.detail == "192.0.2.10 → 192.0.2.1")
+        // **끝난 상태에는 딸린 줄이 없다.** 남은 일도 없고 문제도 없으면 적을 것이 없다 —
+        // 지금 어느 설정인지는 머리말과 아이콘·체크 표시가 이미 말한다.
+        #expect(model.detail == nil)
     }
 
     @Test("위치 권한이 없으면 — 값이 다 있어도 — 초기 설정하기")

@@ -41,11 +41,31 @@ struct StatusModelAutoSwitchTests {
         )
     }
 
-    @Test("켜져 있으면 지금 보고 있는 Wi-Fi 이름을 보여준다")
-    func showsObservedNetwork() {
+    /// **잘 돌고 있을 때는 말이 없다** (2026-07-28 오너 판단).
+    ///
+    /// 예전에는 이 자리에 지금 붙어 있는 Wi-Fi 이름을 적었다. 그런데 이 도구가 하는 일은
+    /// 사내·사외 전환을 쉽게 하는 것과 지금 어느 설정인지 확인하는 것이고, **어느 쪽인지는
+    /// 메뉴바 아이콘과 프로필의 체크 표시가 이미 말한다.** 이름은 거들지 않는다.
+    @Test("켜져 있고 잘 돌고 있으면 아무 줄도 두지 않는다")
+    func silentWhileWorking() {
         let model = StatusModel.resolve(input(hold: .alreadyApplied(profile: "office")))
         #expect(model.autoSwitchEnabled)
-        #expect(model.autoSwitchNotes == ["Wi-Fi OFFICE-WIFI"])
+        #expect(model.autoSwitchNotes.isEmpty)
+    }
+
+    /// 말이 없는 것과 **말할 것이 없는 것**은 다르다. 이름을 못 읽는 상태는 지금 무엇에
+    /// 붙어 있는지가 아니라 **자동 전환이 성립하지 않는다**는 뜻이라 그대로 남는다.
+    @Test("이름을 못 읽는 상태는 켜져 있어도 남긴다")
+    func keepsNotesWhenNameCannotBeRead() {
+        let wifiOff = StatusModel.resolve(input(ssid: .wifiOff, hold: .wifiOff))
+        #expect(wifiOff.autoSwitchNotes == ["Wi-Fi 꺼짐"])
+
+        let notAssociated = StatusModel.resolve(input(ssid: .notAssociated, hold: .notAssociated))
+        #expect(notAssociated.autoSwitchNotes == ["Wi-Fi 미접속"])
+
+        // 이름을 못 읽는데 판정은 평소 상태로 남아 있는 순간에도 그 사실이 남아야 한다.
+        let unreadable = StatusModel.resolve(input(ssid: .unavailable("읽기 실패"), hold: nil))
+        #expect(unreadable.autoSwitchNotes == ["Wi-Fi 이름 읽기 실패"])
     }
 
     @Test("꺼져 있으면 군더더기를 붙이지 않는다")
@@ -177,11 +197,11 @@ struct StatusModelAutoSwitchTests {
 
         // 꺼짐 → 표시
         #expect(denied.needsNotificationPermission)
-        #expect(denied.autoSwitchNotes == ["Wi-Fi OFFICE-WIFI", "알림 꺼짐"])
+        #expect(denied.autoSwitchNotes == ["알림 꺼짐"])
 
         // 허용 → 사라짐. 조치 항목만 거두고 보조 줄이 남으면 사용자는 여전히 꺼진 줄 안다.
         #expect(!allowed.needsNotificationPermission)
-        #expect(allowed.autoSwitchNotes == ["Wi-Fi OFFICE-WIFI"])
+        #expect(allowed.autoSwitchNotes.isEmpty)
 
         // 두 모델이 실제로 다르다 — 메뉴는 모델이 바뀔 때만 다시 그린다(`StatusItemController.render`).
         // 같은 값으로 판정되면 새로 읽어도 화면이 그대로 남는다.
@@ -196,10 +216,10 @@ struct StatusModelAutoSwitchTests {
         #expect(!MenuLayout.sections(blocked).contains(.autoSwitch))
         #expect(blocked.detail == "위치 권한 없음")
 
-        // 허용되면 토글도 그 아래 상태 줄도 제자리로 돌아온다. 켜짐/꺼짐 값은 그대로다.
+        // 허용되면 토글이 제자리로 돌아오고, 막혔다는 줄은 사라진다 (잘 돌면 말이 없다).
         #expect(MenuLayout.sections(granted).contains(.autoSwitch))
         #expect(granted.autoSwitchEnabled)
-        #expect(granted.autoSwitchNotes == ["Wi-Fi OFFICE-WIFI"])
+        #expect(granted.autoSwitchNotes.isEmpty)
 
         #expect(blocked != granted)
     }

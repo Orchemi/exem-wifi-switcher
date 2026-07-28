@@ -113,9 +113,15 @@ public struct StatusModel: Equatable, Sendable {
     public let icon: MenuBarIcon
     /// 메뉴 첫 줄. 지금이 어떤 상태인가를 한 마디로.
     public let headline: String
-    /// 머리말에 딸린 보조 줄. 현재 값 · 실패 이유 · 원인이 온다.
+    /// 머리말에 딸린 보조 줄. **문제와 남은 일만 온다** — 실패 이유 · 설정 파일 오류 ·
+    /// 아직 저장 안 됨처럼, 모르면 손해를 보는 것들이다.
     ///
-    /// **머리말이 이미 말한 것은 여기 오지 않는다.** 같은 말을 크기만 줄여 한 번 더 적으면
+    /// **정상 상태에는 보조 줄을 두지 않는다** (2026-07-28 오너 판단). 예전에는 여기에
+    /// 지금 IP 와 라우터를 적었는데, 이 도구가 하는 일은 ① 사내·사외 전환을 쉽게 하는 것과
+    /// ② 지금 어느 설정인지 쉽게 확인하는 것이다. **어느 쪽인지는 메뉴바 아이콘과 프로필의
+    /// 체크 표시가 이미 말한다** — 주소를 한 줄 더 적어도 읽을 것만 늘고 판단은 늘지 않는다.
+    ///
+    /// **머리말이 이미 말한 것도 오지 않는다.** 같은 말을 크기만 줄여 한 번 더 적으면
     /// 줄만 늘고 읽을 것은 늘지 않는다. 덧붙일 것이 없으면 `nil` 로 두고 줄을 만들지 않는다.
     public let detail: String?
     /// 목록에 보여줄 프로필. 설정을 못 읽으면 비어 있다.
@@ -269,7 +275,7 @@ public struct StatusModel: Equatable, Sendable {
             return StatusModel(
                 icon: observedIcon,
                 headline: "\(active.displayName) 적용 중",
-                detail: summary(of: interface),
+                detail: addressProblem(of: interface),
                 profiles: profiles,
                 activeProfileName: active.name,
                 canSwitch: true,
@@ -279,7 +285,7 @@ public struct StatusModel: Equatable, Sendable {
         return StatusModel(
             icon: observedIcon,
             headline: "프로필 없음 — \(methodText(interface.configMethod))",
-            detail: summary(of: interface),
+            detail: addressProblem(of: interface),
             profiles: profiles,
             activeProfileName: nil,
             canSwitch: true,
@@ -291,10 +297,16 @@ public struct StatusModel: Equatable, Sendable {
 
     /// 자동 전환 토글 아래에 실제로 **올릴** 보조 줄들.
     ///
-    /// 자동 전환은 눈에 보이지 않게 일한다. 켜져 있는데 조용하면 사용자는 고장과 구분할 수 없다 —
-    /// 그래서 평소에도 "지금 무엇을 보고 있는지" 한 줄은 남긴다.
+    /// 자동 전환은 눈에 보이지 않게 일한다. 그래서 **멈춰 있으면 왜 멈췄는지** 한 줄 남긴다 —
+    /// 켜 놓았는데 아무 일도 일어나지 않는 것과 고장을 구분할 수 있어야 한다.
     ///
-    /// 다만 **머리말이 이미 말한 것은 여기 오지 않는다** (설정 필요 · 전환 권한 미설치).
+    /// **잘 돌고 있을 때는 아무 줄도 두지 않는다** (2026-07-28 오너 판단). 그 자리에 올 수 있는
+    /// 것은 지금 붙어 있는 Wi-Fi 이름뿐인데, **어느 Wi-Fi 에 붙어 있는지는 이 도구가 하는 일과
+    /// 무관하다** — 지금 어느 설정인지는 메뉴바 아이콘과 프로필의 체크 표시가 이미 말한다.
+    /// 다만 **이름을 못 읽는 상태**(Wi-Fi 꺼짐 · 미접속 · 위치 권한)는 그대로 남긴다.
+    /// 그것은 지금 무엇에 붙어 있는지가 아니라 자동 전환이 성립하지 않는다는 뜻이다.
+    ///
+    /// 그리고 **머리말이 이미 말한 것은 여기 오지 않는다** (설정 필요 · 전환 권한 미설치).
     /// 같은 말이 두 번 적히면 무엇이 상태이고 무엇이 조치인지 구분이 사라진다.
     private static func menuNotes(_ input: StatusInput, model: StatusModel) -> [String] {
         guard input.autoSwitchEnabled else { return [] }
@@ -303,6 +315,12 @@ public struct StatusModel: Equatable, Sendable {
         switch input.autoSwitchHold {
         case .configUnavailable?, .helperNotInstalled?:
             break  // 머리말과 그 보조 줄이 이미 말했다
+        case .none, .busy?, .alreadyApplied?, .settling?:
+            // 멈춘 것이 없는 평소 상태. 이름을 **읽고 있으면** 적을 것이 없다.
+            if input.ssid?.name == nil,
+               let reason = autoSwitchReason(input.autoSwitchHold, ssid: input.ssid, profiles: model.profiles) {
+                notes.append(reason)
+            }
         default:
             if let reason = autoSwitchReason(input.autoSwitchHold, ssid: input.ssid, profiles: model.profiles) {
                 notes.append(reason)
@@ -402,10 +420,13 @@ public struct StatusModel: Equatable, Sendable {
     }
 
     /// 둘째 줄에 쓰는 현재 값 요약. 자기 기기의 값이므로 그대로 보여준다.
-    private static func summary(of interface: InterfaceInfo) -> String? {
-        guard let ip = interface.ip else { return "IP 주소 없음" }
-        guard let router = interface.router else { return ip.description }
-        return "\(ip) → \(router)"
+    /// 정상 상태에는 보조 줄을 두지 않는다 — **주소를 못 받은 것만** 남긴다.
+    ///
+    /// 예전에는 `10.0.0.7 → 10.0.0.1` 처럼 지금 주소를 적었다. 그것은 값이지 문제가 아니고,
+    /// 지금이 어느 프로필인지는 아이콘과 체크 표시가 이미 말한다. 주소가 아예 없는 것은 다르다 —
+    /// 그 상태에서는 어느 프로필도 실제로 서 있지 않다.
+    private static func addressProblem(of interface: InterfaceInfo) -> String? {
+        interface.hasAddress ? nil : "IP 주소 없음"
     }
 
     /// 시스템이 준 원문을 메뉴 한 줄에 맞게 줄인다.

@@ -195,9 +195,11 @@ struct StatusModelMenuTextTests {
         #expect(!model.needsNotificationPermission)
         #expect(!model.canRetryAutoSwitch)
         #expect(!model.needsSetup)
-        // 조용하다고 말이 없는 것은 아니다 — 무엇을 보고 있는지 한 줄은 읽혀야 한다.
-        #expect(model.autoSwitchNotes == ["Wi-Fi OFFICE-WIFI"])
-        #expect(model.detail == "192.0.2.10 → 192.0.2.1")
+        // **잘 돌고 있으면 아무 줄도 두지 않는다** (2026-07-28 오너 판단).
+        // 지금 어느 설정인지는 메뉴바 아이콘과 프로필의 체크 표시가 이미 말한다 —
+        // 붙어 있는 Wi-Fi 이름도, 지금 주소도 읽을 것만 늘리고 판단은 늘리지 않는다.
+        #expect(model.autoSwitchNotes.isEmpty)
+        #expect(model.detail == nil)
     }
 
     // MARK: - 같은 말을 두 번 하지 않는다
@@ -269,7 +271,8 @@ struct StatusModelMenuTextTests {
             autoSwitchHold: .alreadyApplied(profile: "office"), notifications: .denied
         ))
         #expect(denied.needsNotificationPermission)
-        #expect(denied.autoSwitchNotes == ["Wi-Fi OFFICE-WIFI", "알림 꺼짐"])
+        // 잘 돌고 있는 것은 적지 않으므로 남는 것은 막힌 것 하나다.
+        #expect(denied.autoSwitchNotes == ["알림 꺼짐"])
 
         // 위치 권한 쪽은 자동 전환 무리가 아니라 **머리말**이 맡는다 — 초기 설정의 필수 항목이라
         // 막혀 있으면 그 무리 자체가 서지 않는다 (`MenuLayout`).
