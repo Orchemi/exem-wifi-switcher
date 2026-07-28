@@ -9,6 +9,60 @@ import Testing
 @Suite("온보딩 입력")
 struct ProfileDraftTests {
 
+    // MARK: - 저장할 수 있는 상태인가
+
+    /// 아직 아무것도 적지 않은 사람에게 칸마다 오류를 붙이는 것은 답이 아니다.
+    /// [저장] 을 누를 수 없게 해 두고, 언제 채워지는지는 머리말이 말한다.
+    @Test("빈 칸이 하나라도 있으면 저장할 수 없다")
+    func cannotSaveWithEmptyFields() {
+        #expect(!ManualProfileDraft().hasRequiredValues)
+        #expect(!ManualProfileDraft(ip: "192.0.2.10").hasRequiredValues)
+        #expect(!ManualProfileDraft(
+            ip: "192.0.2.10", subnet: "255.255.255.0", router: "192.0.2.1", dns: "   "
+        ).hasRequiredValues)
+    }
+
+    /// Wi-Fi 이름은 없어도 프로필이 성립한다 — 자동 전환만 걸리지 않고, 그 사실은
+    /// 초기 설정 판정이 따로 말한다. 여기서 막으면 메뉴에서 골라 쓰는 길까지 막힌다.
+    @Test("Wi-Fi 이름이 없어도 저장은 할 수 있다")
+    func allowsSavingWithoutWiFiName() {
+        let draft = ManualProfileDraft(
+            ip: "192.0.2.10", subnet: "255.255.255.0", router: "192.0.2.1", dns: "192.0.2.53"
+        )
+        #expect(draft.hasRequiredValues)
+    }
+
+    // MARK: - 빈 칸만 채운다
+
+    /// 창을 열어 둔 채 사내 Wi-Fi 에 붙는 순간에 쓰는 규칙이다.
+    @Test("비어 있는 칸만 지금 구성으로 채운다")
+    func fillsOnlyEmptyFields() {
+        let typed = ManualProfileDraft(ip: "203.0.113.7", dns: "203.0.113.53")
+        let current = ManualProfileDraft(
+            ip: "192.0.2.10", subnet: "255.255.255.0", router: "192.0.2.1",
+            dns: "192.0.2.53", ssids: "EXAMPLE-AP"
+        )
+        let merged = typed.adopting(current)
+
+        // 사람이 적어 둔 것은 그대로 남는다.
+        #expect(merged.ip == "203.0.113.7")
+        #expect(merged.dns == "203.0.113.53")
+        // 비어 있던 칸만 채워진다.
+        #expect(merged.subnet == "255.255.255.0")
+        #expect(merged.router == "192.0.2.1")
+        #expect(merged.ssids == "EXAMPLE-AP")
+    }
+
+    @Test("빈 초안은 지금 구성을 그대로 받는다")
+    func fillsEverythingWhenNothingTyped() {
+        let current = ManualProfileDraft(
+            ip: "192.0.2.10", subnet: "255.255.255.0", router: "192.0.2.1",
+            dns: "192.0.2.53", ssids: "EXAMPLE-AP"
+        )
+        #expect(ManualProfileDraft().adopting(current) == current)
+        #expect(ManualProfileDraft().adopting(current).hasRequiredValues)
+    }
+
     // MARK: - 현재 구성에서 뽑아오기
 
     @Test("현재가 수동 구성이면 그 값을 초안으로 제안한다")

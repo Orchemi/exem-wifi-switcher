@@ -30,8 +30,10 @@ public enum SettingsIntro: Equatable, Sendable {
         case .unsaved:
             return "아직 저장 안 됨 · 저장하면 이 값이 사내 프로필이 됨"
         case .nothingToFillYet:
-            // 줄바꿈을 뜻 단위로 못박는다 — 맡겨 두면 '지금 / 입력해도 됨' 처럼 한 구가 갈린다.
-            return "지금은 고정 IP 구성이 아님 · 사내에서 열면 그때 구성이 그대로 채워짐"
+            // **행동을 말한다.** '사내에서 열면' 은 이 사람이 창을 여닫아야 하는 것처럼 읽혔는데,
+            // 실제로는 창을 열어 둔 채 사내 Wi-Fi 에 붙기만 하면 그 자리에서 값이 들어온다.
+            // 줄바꿈은 뜻 단위로 못박는다 — 맡겨 두면 '지금 / 입력해도 됨' 처럼 한 구가 갈린다.
+            return "지금은 고정 IP 구성이 아님 · 사내 Wi-Fi 에 연결하면 값이 자동으로 채워짐"
                 + "\n값을 미리 알면 지금 입력해도 됨"
         case .unreadableConfig(let reason):
             return "설정 파일을 읽지 못함 — \(reason)"

@@ -9,7 +9,7 @@ import WifiSwitcherCore
 /// 검증은 이 파일에 없다. `ManualProfileDraft` 가 판단하고, 여기서는 그 결과를
 /// 해당하는 칸 아래에 옮겨 적기만 한다.
 @MainActor
-final class SettingsWindowController: NSWindowController, NSWindowDelegate {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
 
     private let onSaved: () -> Void
     /// 위치 권한 상태를 가진 쪽(`LocationAuthority`)에 그때그때 물어본다.
@@ -65,6 +65,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// Wi-Fi 서비스를 못 찾았을 때만 남는 안내. 저장 실패 문구와 같은 줄을 쓰므로
     /// 상태로 들고 있다가 그 문구를 지울 때 되돌린다.
     private var serviceNotice: String?
+
+    /// **빈 칸이 있으면 누를 수 없다.** 아직 아무것도 적지 않은 사람에게 칸마다 오류를 붙이는 것은
+    /// 틀린 값을 적었을 때 할 말이지 지금 할 말이 아니다 (`ManualProfileDraft.hasRequiredValues`).
+    private let saveButton = NSButton(title: "저장", target: nil, action: nil)
 
     private let loginItemCheckbox = NSButton(checkboxWithTitle: "로그인 시 자동 실행", target: nil, action: nil)
     /// 로그인 항목 화면으로 가는 손잡이. macOS 가 이 항목을 껐는지 확인하고 되돌릴 수 있는 유일한 자리다.
@@ -195,6 +199,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             fill(currentConfigurationDraft ?? ManualProfileDraft())
         }
         refreshIntro()
+        updateSaveAvailability()
 
         loginItemCheckbox.state = LoginItem.isRegistered() ? .on : .off
 
@@ -288,10 +293,44 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// 다 적고 칸을 떠나면 다음 관측이 잠근다.
     func update(observation: Observation) {
         self.observation = observation
+        // 사내 Wi-Fi 에 붙는 순간이 이 경로다. **다섯 칸이 함께 찬다** — 이름만 채우고 나머지를
+        // 두면 값을 손으로 옮겨 적게 된다 (창을 닫았다 다시 열어야 채워지던 것이 그 상태다).
+        adoptCurrentConfiguration()
         if ssidField.currentEditor() == nil { resolveSSIDField() }
-        // 값이 들어왔으면 머리말도 따라가야 한다 — '채울 것이 없음' 이 '아직 저장 안 됨' 으로 바뀐다.
+        // 값이 들어왔으면 머리말도, 저장 버튼도 따라가야 한다 —
+        // '채울 것이 없음' 이 '아직 저장 안 됨' 이 되고, 못 누르던 [저장] 이 살아난다.
         refreshIntro()
+        updateSaveAvailability()
         refreshPermissions()
+    }
+
+    /// 지금 시스템 구성으로 **비어 있는 칸만** 채운다.
+    ///
+    /// 고정 IP 로 돌고 있을 때만 값이 나온다(`ManualProfileDraft.from`) — 사외에서 읽은 값을
+    /// 사내 프로필에 넣으면 그 자리에서 사내 고정 IP 가 걸린다.
+    /// (Wi-Fi 이름 칸은 잠금까지 함께 정해야 해서 `resolveSSIDField()` 가 맡는다)
+    ///
+    /// **사람이 적어 둔 것은 초안이 지켜 준다** — 비어 있지 않은 칸은 `adopting` 이 그대로
+    /// 돌려주므로 값이 같아 다시 쓰지 않는다. 그래서 여기서는 커서가 어디 있는지 보지 않는다.
+    /// 창을 열면 IP 칸에 커서가 가 있어서(`present`), 커서를 기준으로 막으면 **정작 그 칸만
+    /// 안 채워진다** — 미리보기에서 사외→사내 전환을 돌려 보고 잡았다.
+    private func adoptCurrentConfiguration() {
+        guard let current = currentConfigurationDraft else { return }
+        let merged = draft.adopting(current)
+        adopt(merged.ip, into: ipField)
+        adopt(merged.subnet, into: subnetField)
+        adopt(merged.router, into: routerField)
+        adopt(merged.dns, into: dnsField)
+    }
+
+    private func adopt(_ value: String, into field: NSTextField) {
+        guard field.stringValue != value else { return }
+        field.stringValue = value
+    }
+
+    /// 저장할 수 있는 상태인지 버튼에 반영한다. 판단은 초안이 한다.
+    private func updateSaveAvailability() {
+        saveButton.isEnabled = draft.hasRequiredValues
     }
 
     /// 현재 DNS 설정을 **읽지 못했으면** 그 사실을 DNS 칸에 남긴다.
@@ -627,6 +666,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - 저장
 
+    /// 칸이 바뀌면 저장 버튼도 따라간다.
+    func controlTextDidChange(_ obj: Notification) {
+        updateSaveAvailability()
+    }
+
     @objc private func save() {
         clearIssues()
 
@@ -773,6 +817,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         grid.column(at: 0).width = Self.labelColumnWidth
         grid.column(at: 1).xPlacement = .fill
 
+        // 한 글자 적을 때마다 [저장] 을 누를 수 있는지 다시 본다 — 다 채우고도 못 누르거나
+        // 지우고도 눌리는 순간이 있으면 버튼을 믿을 수 없게 된다.
+        for field in [ssidField, ipField, subnetField, routerField, dnsField] {
+            field.delegate = self
+        }
+
         let separator = Self.makeSeparator()
         let permissionSeparator = Self.makeSeparator()
         let permissionTitle = NSTextField(labelWithString: "권한")
@@ -819,7 +869,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         cancelButton.bezelStyle = .rounded
         cancelButton.keyEquivalent = "\u{1b}"
 
-        let saveButton = NSButton(title: "저장", target: self, action: #selector(save))
+        saveButton.target = self
+        saveButton.action = #selector(save)
         saveButton.bezelStyle = .rounded
         saveButton.keyEquivalent = "\r"
 

@@ -67,6 +67,33 @@ public struct ManualProfileDraft: Equatable, Sendable {
         }
     }
 
+    /// 저장을 시도할 수 있는가. **형식은 보지 않는다** — 빈 칸이 있는지만 본다.
+    ///
+    /// 사외에서 처음 여는 사람은 다섯 칸을 다 비운 채로 마주한다. 그 자리에서 [저장] 을
+    /// 누르면 칸마다 오류가 붙는데, 그것은 **틀린 값을 적었을 때 하는 말**이지 아직 아무것도
+    /// 적지 않은 사람에게 할 말이 아니다. 누를 수 없게 해 두고 머리말이 언제 채워지는지 말한다.
+    ///
+    /// **Wi-Fi 이름은 여기 넣지 않는다.** 없어도 프로필은 성립하고(메뉴에서 골라 쓰는 길),
+    /// 없으면 자동 전환만 걸리지 않는다 — 그 사실은 초기 설정 판정(`SetupChecklist`)이 따로 말한다.
+    public var hasRequiredValues: Bool {
+        [ip, subnet, router, dns].allSatisfy {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    /// 비어 있는 칸만 상대의 값으로 채운 초안. **사람이 적어 둔 것은 덮지 않는다.**
+    ///
+    /// 창을 열어 둔 채 사내 Wi-Fi 에 붙는 순간에 쓴다 — 그때 지금 구성을 읽어 빈 칸이 찬다.
+    public func adopting(_ other: ManualProfileDraft) -> ManualProfileDraft {
+        ManualProfileDraft(
+            ip: ip.isEmpty ? other.ip : ip,
+            subnet: subnet.isEmpty ? other.subnet : subnet,
+            router: router.isEmpty ? other.router : router,
+            dns: dns.isEmpty ? other.dns : dns,
+            ssids: ssids.isEmpty ? other.ssids : ssids
+        )
+    }
+
     /// 저장할 Wi-Fi 이름 목록. 쉼표로 끊고 앞뒤 공백만 턴다.
     ///
     /// **공백으로 끊지 않는다** — SSID 에는 공백이 들어갈 수 있어서(`OFFICE WIFI`)

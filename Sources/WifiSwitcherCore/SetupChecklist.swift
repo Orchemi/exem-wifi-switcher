@@ -130,7 +130,8 @@ public enum SetupChecklist {
     }
 
     /// 사외에서 값만 남았을 때 적는 한 줄. **남은 일이 아니라 곧 일어날 일이다.**
-    public static let valuesArriveInOffice = "사내에서 열면 값이 채워짐"
+    /// 설정 창 머리말(`SettingsIntro.nothingToFillYet`)과 같은 낱말을 쓴다.
+    public static let valuesArriveInOffice = "사내 Wi-Fi 에 연결하면 채워짐"
 
     /// 머리말('초기 설정하기') 아래에 붙일 보조 줄.
     ///
