@@ -33,16 +33,20 @@ public enum PermissionSubject: String, CaseIterable, Sendable {
     /// (관리자 인증 한 번 · 위치 정보를 어디에 쓰는가). **앱이 어떻게 동작하는지는 적지 않는다.**
     /// 바로 옆에 [설치] 버튼이 있는데 "[설치] 를 누르면…" 이라고 적는 것은 화면이 제 이야기를
     /// 자기가 하는 꼴이다. 무엇을 설치하는지는 그 버튼을 눌렀을 때 계획 창이 전부 보여준다.
+    ///
+    /// **문장이 아니라 명사구다.** 권한 넷에 두세 줄씩 붙으면 화면 절반이 글이 되고, 그러면
+    /// 아무도 읽지 않는다. 전문은 README 와 [설치] 시트가 들고 있으므로 여기는 요약이면 된다 —
+    /// 다만 **줄이다가 뜻이 달라지면 안 된다** ('인증 1회' 를 빼면 매번 암호를 묻는 줄 안다).
     public var purpose: String {
         switch self {
         case .switching:
-            return "네트워크 구성을 바꾸려면 관리자 권한이 필요합니다. 설치할 때 관리자 인증을 한 번 받고, 이후 전환할 때는 묻지 않습니다."
+            return "네트워크 구성 변경에 필요 · 설치 시 관리자 인증 1회"
         case .saving:
-            return "입력한 값은 관리자 권한으로 실행되는 명령에 그대로 쓰이므로, 아무나 고칠 수 없는 자리에 둡니다. 저장할 때 관리자 인증을 한 번 받습니다."
+            return "설정 파일은 관리자만 고칠 수 있는 자리 · 저장 시 관리자 인증 1회"
         case .location:
-            return "macOS 는 Wi-Fi 이름을 위치 정보로 다룹니다. 사내인지 아닌지는 이 이름으로만 알 수 있어, 자동 전환에는 이 권한이 필요합니다."
+            return "macOS 는 Wi-Fi 이름을 위치 정보로 취급 · 자동 전환에 필수"
         case .notification:
-            return "전환한 사실을 알립니다. 없어도 전환은 되지만 IP 가 언제 바뀌었는지 알 수 없습니다."
+            return "전환 사실 알림 · 없어도 전환은 동작 (선택)"
         }
     }
 }
@@ -179,9 +183,30 @@ public struct PermissionItem: Equatable, Sendable {
     public let state: PermissionState
     /// 지금 상태. 짧게 한 마디.
     public let status: String
-    /// 무엇을 하면 되는가. 갖춰졌으면 nil.
+    /// 무엇을 하면 되는가. **화면에 그대로 실리므로 한 줄 명사구다.** 갖춰졌으면 nil.
     public let advice: String?
+    /// 화면에는 싣지 않고 **터미널(`--diagnose`)과 툴팁에만** 붙이는 상세.
+    ///
+    /// 화면에는 누를 버튼과 갈 자리가 이미 있지만 터미널에는 둘 다 없다 —
+    /// 시스템 설정 어디로 가야 하는지 같은 것은 거기서만 필요하다. 폭도 터미널이 넉넉하다.
+    public let details: String?
     public let remedy: PermissionRemedy
+
+    public init(
+        subject: PermissionSubject,
+        state: PermissionState,
+        status: String,
+        advice: String?,
+        details: String? = nil,
+        remedy: PermissionRemedy
+    ) {
+        self.subject = subject
+        self.state = state
+        self.status = status
+        self.advice = advice
+        self.details = details
+        self.remedy = remedy
+    }
 
     /// 이름과 목적은 주제에서 파생한다 — 항목마다 다시 적지 않는다.
     public var title: String { subject.title }
@@ -190,18 +215,24 @@ public struct PermissionItem: Equatable, Sendable {
     /// 화면에 붙는 설명 한 줄 — 조치가 따로 있으면 그것을, 아니면 왜 필요한지를 적는다.
     /// 둘을 함께 쌓으면 네 항목이 여덟 줄이 된다.
     ///
+    /// **갖춰진 항목에는 아무 줄도 붙지 않는다(nil).** 이미 해결된 일을 두고 왜 필요한지를
+    /// 계속 읽힐 이유가 없다 — 전부 갖춰지면 권한 섹션은 상태 넉 줄로 끝난다.
+    ///
     /// **버튼이 대신 말하는 조치는 `advice` 에 넣지 않는다.** 옆에 [설치] 가 있는데
     /// "[설치] 를 누르면…" 이라고 적으면 같은 말이 두 번 있는 것이고, 정작 **왜 필요한지**를
     /// 적을 자리가 그 문장에 밀려 사라진다.
-    public var note: String { advice ?? purpose }
+    public var note: String? {
+        guard state != .satisfied else { return nil }
+        return advice ?? purpose
+    }
 
     /// `--diagnose` 한 줄. 화면과 **같은 판정에서** 나온다.
     ///
     /// 터미널에는 누를 버튼이 없다 — 화면에서 버튼이 대신 말하던 몫까지 글로 적어야 하므로,
-    /// 손볼 것이 있으면 화면과 같은 설명 줄(`note`)을 함께 싣는다.
+    /// 손볼 것이 있으면 설명을 함께 싣는다. 폭이 넉넉하니 **상세가 있으면 상세를** 쓴다.
     public var diagnosticText: String {
         guard state != .satisfied else { return status }
-        return "\(status) — \(note)"
+        return "\(status) — \(details ?? note ?? purpose)"
     }
 }
 
@@ -296,10 +327,7 @@ public struct PermissionReport: Equatable, Sendable {
     /// 그 자리에 남는 한 줄은 "왜 이 권한이 필요한가"(`purpose`) 여야 한다.
     private static func installRemedy(_ input: PermissionInput) -> (advice: String?, remedy: PermissionRemedy) {
         guard input.installerAvailable else {
-            return (
-                "터미널에서 \(installCommand) 를 실행하세요. (앱 번들 밖에서 실행 중이라 여기서 설치할 수 없습니다)",
-                .runCommand(installCommand)
-            )
+            return ("번들 밖 실행 · 터미널에서 \(installCommand)", .runCommand(installCommand))
         }
         return (nil, .install)
     }
@@ -324,10 +352,9 @@ public struct PermissionReport: Equatable, Sendable {
                 subject: .switching,
                 state: .actionNeeded,
                 status: "무암호 규칙 없음",
-                advice: [
-                    "전환 스크립트는 있지만 무암호 규칙이 없어 전환할 때마다 암호를 물어 실패합니다.",
-                    install.advice,
-                ].compactMap { $0 }.joined(separator: " "),
+                advice: [install.advice, "전환 때마다 암호 요구 · 다시 설치하면 해결"]
+                    .compactMap { $0 }.joined(separator: " · "),
+                details: "전환 스크립트는 있지만 무암호 규칙이 없어 전환할 때마다 암호를 물어 실패합니다.",
                 remedy: install.remedy
             )
         }
@@ -359,7 +386,8 @@ public struct PermissionReport: Equatable, Sendable {
                 subject: .saving,
                 state: .actionNeeded,
                 status: "이 계정으로는 저장 불가",
-                advice: "지금 계정이 관리자 그룹이 아닙니다. 설치로는 해결되지 않습니다 — "
+                advice: "설치로 해결 안 됨 · 관리자 계정에서 저장",
+                details: "지금 계정이 관리자 그룹이 아닙니다. 설치로는 해결되지 않습니다 — "
                     + "관리자 계정에서 값을 저장하세요.",
                 remedy: .none
             )
@@ -401,7 +429,8 @@ public struct PermissionReport: Equatable, Sendable {
                 subject: .location,
                 state: .actionNeeded,
                 status: "거부됨",
-                advice: "Wi-Fi 이름을 읽지 못해 자동 전환이 멈춰 있습니다. "
+                advice: "자동 전환 멈춤 · 시스템 설정에서 허용",
+                details: "Wi-Fi 이름을 읽지 못해 자동 전환이 멈춰 있습니다. "
                     + SystemSettingsPane.locationServices.openGuidance,
                 remedy: .openSettings(.locationServices)
             )
@@ -435,7 +464,8 @@ public struct PermissionReport: Equatable, Sendable {
                 subject: .notification,
                 state: .actionNeeded,
                 status: "거부됨",
-                advice: "전환 알림이 뜨지 않아 전환 사실이 메뉴에만 남습니다. "
+                advice: "전환 사실이 메뉴에만 남음 · 시스템 설정에서 허용",
+                details: "전환 알림이 뜨지 않아 전환 사실이 메뉴에만 남습니다. "
                     + SystemSettingsPane.notifications.openGuidance,
                 remedy: .openSettings(.notifications)
             )
@@ -444,7 +474,7 @@ public struct PermissionReport: Equatable, Sendable {
                 subject: .notification,
                 state: .undetermined,
                 status: "아직 묻지 않음",
-                advice: "앱을 실행하면 승인 창이 뜹니다.",
+                advice: "실행할 때 승인 창",
                 remedy: .none
             )
         case .unavailable:
@@ -453,7 +483,7 @@ public struct PermissionReport: Equatable, Sendable {
                 subject: .notification,
                 state: .undetermined,
                 status: "확인 불가",
-                advice: "앱 번들 밖에서 실행 중입니다.",
+                advice: "번들 밖 실행",
                 remedy: .none
             )
         }

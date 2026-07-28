@@ -29,11 +29,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let routerField = SettingsWindowController.makeField(placeholder: "192.0.2.1")
     // 이 창이 편집하는 것은 **고정 IP(office) 프로필**이다. 거기에는 DNS 를 알려줄 DHCP 가 없으므로
     // 비워 두면 이름 해석이 통째로 끊긴다 — 안내 문구가 비우도록 유도하면 안 된다.
-    private let dnsField = SettingsWindowController.makeField(placeholder: "필수 · 사내 DNS 서버를 쉼표로 구분 (예: 192.0.2.53, 192.0.2.54)")
+    private let dnsField = SettingsWindowController.makeField(placeholder: "필수 · 쉼표로 구분 (예: 192.0.2.53, 192.0.2.54)")
     // **이 칸이 자동 전환의 방아쇠다.** 여기 적힌 이름의 Wi-Fi 에 붙으면 위 값들이 적용된다.
     // 비워 두면 값이 다 맞아도 자동 전환은 이 프로필을 고르지 못한다 — 그 사실을 자리표시자에 적는다.
     private let ssidField = SettingsWindowController.makeField(
-        placeholder: "비우면 자동 전환 안 함 · 여럿이면 쉼표로 구분"
+        placeholder: "비우면 자동 전환 안 함"
     )
     /// 이 칸을 **채울 수 있게 만드는** 버튼. 위치 권한이 없으면 나타난다.
     ///
@@ -57,6 +57,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let permissionGrid = NSGridView(views: [])
     /// 항목마다 같은 뷰를 계속 쓴다 — 갱신할 때마다 새로 만들면 열 너비가 그때그때 달라진다.
     private var permissionRows: [PermissionSubject: PermissionRowViews] = [:]
+    /// 설명 줄. **갖춰진 항목에서는 통째로 숨긴다** — 빈 줄로 두면 그만큼 여백만 남는다.
+    private var permissionNoteRows: [PermissionSubject: NSGridRow] = [:]
     /// 지금 화면에 그려진 판정. 버튼이 무엇을 해야 하는지 여기서 찾는다.
     private var permissionReport: PermissionReport?
     /// 마지막으로 시작한 권한 읽기. 겹쳐 들어온 읽기 중 이 번호의 결과만 화면에 옮긴다.
@@ -169,23 +171,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 dns: existingOffice.dns.joined(separator: ", "),
                 ssids: existingOffice.ssids.joined(separator: ", ")
             ))
-            introLabel.stringValue = "사내에서 쓰는 고정 IP 값입니다. 바꾼 뒤 저장하면 다음 전환부터 적용됩니다."
+            introLabel.stringValue = "사내에서 쓰는 고정 IP 값 · 저장하면 다음 전환부터 적용"
         } else if let suggestion {
             fill(suggestion)
             // 지금 이 자리가 곧 사내다 — Wi-Fi 이름까지 채워졌으면 [저장] 한 번으로 자동 전환까지 선다.
             introLabel.stringValue = suggestion.ssids.isEmpty
-                ? "지금 이 Mac 은 고정 IP 로 연결돼 있습니다. 아래 값을 사내 프로필로 저장할 수 있습니다."
-                : "지금 이 Mac 은 고정 IP 로 연결돼 있습니다. 지금 붙어 있는 Wi-Fi 와 그 값들을 사내 프로필로 저장합니다."
+                ? "지금 고정 IP 로 연결됨 · 아래 값을 사내 프로필로 저장"
+                : "지금 고정 IP 로 연결됨 · 붙어 있는 Wi-Fi 와 그 값을 사내 프로필로 저장"
         } else {
             fill(ManualProfileDraft())
             // 지금은 DHCP 다. 사내 값도, 사내 Wi-Fi 이름도 여기서는 알 수 없다 —
             // 지금 붙어 있는 Wi-Fi(집·카페일 수 있다)를 사내 것으로 적어 두면 그 자리에서 고정 IP 가 걸린다.
-            introLabel.stringValue = "지금은 고정 IP 구성이 아닙니다. "
-                + "사내에서 쓰는 Wi-Fi 이름과 IP·서브넷·라우터를 입력하세요."
+            introLabel.stringValue = "지금은 고정 IP 구성이 아님 · 사내 Wi-Fi 이름과 IP·서브넷·라우터 입력"
         }
 
         if case .unusable(_, let reason) = observation.config {
-            introLabel.stringValue = "설정 파일을 읽지 못했습니다 — \(reason)\n아래 값으로 새로 저장할 수 있습니다."
+            introLabel.stringValue = "설정 파일을 읽지 못함 — \(reason)"
         }
 
         loginItemCheckbox.state = LoginItem.isRegistered() ? .on : .off
@@ -219,7 +220,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
               dnsField.stringValue.isEmpty,
               let label = errorLabels[.dns]
         else { return }
-        label.stringValue = "현재 DNS 설정을 읽지 못했습니다 (\(reason)). 사내 DNS 서버를 직접 입력하세요."
+        label.textColor = .systemRed
+        label.stringValue = "현재 DNS 를 읽지 못함 (\(reason)) · 직접 입력"
         errorRows[.dns]?.isHidden = false
     }
 
@@ -275,7 +277,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             row.status.stringValue = item.status
             // 색은 문제가 있을 때만 쓴다. 다 갖춰진 화면을 초록으로 도배하지 않는다.
             row.status.textColor = item.state == .actionNeeded ? .systemOrange : .labelColor
-            row.note.stringValue = item.note
+            // 갖춰진 항목에는 설명이 없다 — 이미 해결된 일을 계속 읽힐 이유가 없다.
+            row.note.stringValue = item.note ?? ""
+            permissionNoteRows[item.subject]?.isHidden = item.note == nil
 
             switch item.remedy {
             case .none:
@@ -289,7 +293,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             case .runCommand(let command):
                 row.button.isHidden = false
                 row.button.title = "명령 복사"
-                row.note.stringValue = Self.keepingWhole(command, in: item.note)
+                row.note.stringValue = Self.keepingWhole(command, in: item.note ?? "")
             case .requestLocationPermission:
                 row.button.isHidden = false
                 row.button.title = "허용 요청"
@@ -319,7 +323,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case .none, .install, .runCommand:
             ssidPermissionButton.isHidden = true
         }
-        ssidPermissionButton.toolTip = ssidPermissionButton.isHidden ? nil : location.note
+        ssidPermissionButton.toolTip = ssidPermissionButton.isHidden ? nil : (location.details ?? location.note)
     }
 
     /// 칸 옆 버튼이 하는 일도 권한 표의 조치 그대로다.
@@ -634,6 +638,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 noticeLabel.stringValue = issue.message
                 continue
             }
+            label.textColor = .systemRed
             label.stringValue = issue.message
             errorRows[issue.field]?.isHidden = false
         }
@@ -805,7 +810,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             let titleRow = permissionGrid.addRow(with: [row.title, header])
             // 항목 사이만 벌린다. 상태와 설명은 붙어 있어야 한 항목으로 읽힌다.
             if index > 0 { titleRow.topPadding = 10 }
-            permissionGrid.addRow(with: [NSGridCell.emptyContentView, row.note])
+            let noteRow = permissionGrid.addRow(with: [NSGridCell.emptyContentView, row.note])
+            // 판정이 오기 전에는 숨겨 둔다 — 잠깐 나타났다 사라지면 창 높이가 한 번 출렁인다.
+            noteRow.isHidden = true
+            permissionNoteRows[subject] = noteRow
 
             permissionRows[subject] = row
         }
@@ -843,13 +851,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// 라벨 + 입력 칸 한 줄, 그리고 그 아래 숨겨진 오류 줄 하나.
-    private func addRow(to grid: NSGridView, title: String, control: NSView, field: DraftField?) {
+    @discardableResult
+    private func addRow(to grid: NSGridView, title: String, control: NSView, field: DraftField?) -> NSGridRow {
         let label = NSTextField(labelWithString: title)
         label.font = .systemFont(ofSize: NSFont.systemFontSize)
         label.textColor = .labelColor
-        grid.addRow(with: [label, control])
+        let titleRow = grid.addRow(with: [label, control])
 
-        guard let field else { return }
+        guard let field else { return titleRow }
         let errorLabel = SettingsWindowController.makeWrappingLabel(
             font: .systemFont(ofSize: NSFont.smallSystemFontSize),
             color: .systemRed
@@ -861,6 +870,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         row.isHidden = true
         errorLabels[field] = errorLabel
         errorRows[field] = row
+        return titleRow
     }
 
     private static func makeField(placeholder: String) -> NSTextField {
@@ -912,7 +922,6 @@ private struct PermissionRowViews {
         status.font = .systemFont(ofSize: NSFont.systemFontSize)
         status.lineBreakMode = .byTruncatingTail
 
-        // 읽는 동안에도 '왜 필요한가' 는 이미 안다. 빈 줄로 두면 결과가 올 때 창이 한 번 커진다.
         note = NSTextField(wrappingLabelWithString: subject.purpose)
         note.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         note.textColor = .secondaryLabelColor

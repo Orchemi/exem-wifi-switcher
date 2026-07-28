@@ -61,8 +61,10 @@ struct PermissionReportTests {
             #expect(item.state == .satisfied)
             #expect(item.advice == nil)
             #expect(item.remedy == .none)
-            // 문제가 없을 때 화면에 남는 줄은 '왜 필요한가' 하나뿐이다.
-            #expect(item.note == item.purpose)
+            // **갖춰진 항목에는 아무 줄도 붙지 않는다.** 이미 해결된 일을 두고 왜 필요한지를
+            // 계속 읽힐 이유가 없다 — 전부 갖춰지면 권한 섹션은 상태 넉 줄로 끝난다.
+            #expect(item.note == nil)
+            #expect(item.diagnosticText == item.status)
         }
     }
 
@@ -77,8 +79,9 @@ struct PermissionReportTests {
         // 정작 왜 이 권한이 필요한지가 그 문장에 밀려난다. 그 자리에 남는 줄은 '왜' 여야 한다.
         #expect(item.advice == nil)
         #expect(item.note == item.purpose)
-        // 대가는 미리 말한다 — 관리자 인증을 한 번 받는다.
-        #expect(item.note.contains("관리자 인증"))
+        // 대가는 미리 말한다 — 관리자 인증을 한 번 받는다. 줄이다가 이것까지 지우면
+        // 사용자가 전환할 때마다 암호를 물을 줄 안다.
+        #expect(item.note?.contains("관리자 인증 1회") == true)
         #expect(PermissionReport.resolve(input(applyInstalled: false)).needsAttention)
     }
 
@@ -225,12 +228,45 @@ struct PermissionReportTests {
 
     // MARK: - 진단 출력과의 공유
 
-    @Test("진단 한 줄은 상태와 조치를 이어 붙인다")
+    @Test("화면은 한 줄로 줄이고, 터미널에는 상세를 싣는다")
     func diagnosticText() {
+        // 갖춰졌으면 상태 한 마디로 끝난다.
         #expect(item(.location, input()).diagnosticText == item(.location, input()).status)
 
+        // 화면에는 누를 버튼과 갈 자리가 있지만 터미널에는 둘 다 없다 — 폭도 넉넉하다.
         let denied = item(.location, input(location: .denied))
-        #expect(denied.diagnosticText == "\(denied.status) — \(denied.advice ?? "")")
+        #expect(denied.note == denied.advice)
+        #expect(denied.details != nil)
+        #expect(denied.diagnosticText == "\(denied.status) — \(denied.details ?? "")")
+        // 화면 줄은 짧고, 상세는 갈 자리까지 적는다.
+        #expect(denied.note?.count ?? 0 < denied.details?.count ?? 0)
+        #expect(denied.details?.contains(SystemSettingsPane.locationServices.displayPath) == true)
+    }
+
+    @Test("화면에 실리는 줄은 문장이 아니라 명사구다")
+    func screenLinesAreShort() {
+        // 권한 넷에 두세 줄씩 붙으면 화면 절반이 글이 되고, 그러면 아무도 읽지 않는다.
+        // 전문은 README 와 [설치] 시트가 들고 있다.
+        let inputs = [
+            input(applyInstalled: false, sudoersInstalled: false),
+            input(sudoersInstalled: false),
+            input(saveConfigInstalled: false),
+            input(isAdministrator: false),
+            input(location: .denied),
+            input(location: .notDetermined),
+            input(notifications: .denied),
+            input(notifications: .pending),
+        ]
+        for probe in inputs {
+            for item in PermissionReport.resolve(probe).items {
+                guard let note = item.note else { continue }
+                #expect(note.count <= 40, "화면 줄이 길다(\(note.count)자): \(note)")
+                #expect(!note.hasSuffix("."), "문장이다: \(note)")
+                for ending in ["습니다", "하세요", "됩니다"] {
+                    #expect(!note.contains(ending), "문장이다: \(note)")
+                }
+            }
+        }
     }
 
     /// 앱이 사용자를 보낼 수 있는 자리 전부. 새 화면을 추가하면 여기에도 넣어라 —
@@ -295,12 +331,13 @@ struct PermissionReportTests {
     @Test("권한 안내는 갈 자리와 찾을 이름을 함께 적는다")
     func adviceCarriesGuidance() {
         // 위치는 목록이 열리므로 이름까지, 알림은 앱 화면이 열리므로 자리까지만.
+        // (화면에는 버튼이 있으니 이 상세는 터미널·툴팁 몫이다)
         let location = item(.location, input(location: .denied))
-        #expect(location.advice?.contains(InstallPaths.appName) == true)
-        #expect(location.advice?.contains(SystemSettingsPane.locationServices.displayPath) == true)
+        #expect(location.details?.contains(InstallPaths.appName) == true)
+        #expect(location.details?.contains(SystemSettingsPane.locationServices.displayPath) == true)
 
         let notification = item(.notification, input(notifications: .denied))
-        #expect(notification.advice?.contains(SystemSettingsPane.notifications.displayPath) == true)
+        #expect(notification.details?.contains(SystemSettingsPane.notifications.displayPath) == true)
         #expect(notification.advice?.contains(InstallPaths.appName) == false)
     }
 
