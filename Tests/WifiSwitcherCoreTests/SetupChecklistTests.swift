@@ -36,6 +36,14 @@ struct SetupChecklistTests {
         router: IPv4Address("192.0.2.1")
     )
 
+    /// 사외 — DHCP 로 돌고 있다. 사내 값을 여기서는 알 수 없다.
+    private static let outsideInfo = InterfaceInfo(
+        configMethod: .dhcp,
+        ip: IPv4Address("198.51.100.24"),
+        subnet: SubnetMask("255.255.255.0"),
+        router: IPv4Address("198.51.100.1")
+    )
+
     /// 초기 설정이 **끝난** 상태. 여기서 하나씩 빼면서 본다.
     private func input(
         config: ConfigStatus = .ready(SetupChecklistTests.config),
@@ -45,11 +53,12 @@ struct SetupChecklistTests {
         location: LocationAuthorizationState = .granted,
         ssid: SSIDReading? = nil,
         action: ActionState = .idle,
-        notifications: NotificationPermission = .allowed
+        notifications: NotificationPermission = .allowed,
+        interface: InterfaceInfo? = SetupChecklistTests.officeInfo
     ) -> StatusInput {
         StatusInput(
             config: config,
-            interface: SetupChecklistTests.officeInfo,
+            interface: interface,
             helperInstalled: helperInstalled,
             sudoersInstalled: sudoersInstalled,
             saveConfigInstalled: saveConfigInstalled,
@@ -251,13 +260,73 @@ struct SetupChecklistTests {
             [.locationPermissionNotAsked], [.locationPermissionDenied],
         ]
         for combination in gaps {
-            guard let line = SetupChecklist.shortfall(combination) else { continue }
-            #expect(line.count <= authoredLimit, "너무 길다(\(line.count)자): \(line)")
-            #expect(!line.hasSuffix("."), "마침표로 끝난다: \(line)")
-            for ending in ["습니다", "하세요", "됩니다", "합니다", "입니다"] {
-                #expect(!line.contains(ending), "문장이다: \(line)")
+            for interface in [Self.officeInfo, Self.outsideInfo, nil] {
+                guard let line = SetupChecklist.shortfall(combination, interface: interface) else { continue }
+                #expect(line.count <= authoredLimit, "너무 길다(\(line.count)자): \(line)")
+                #expect(!line.hasSuffix("."), "마침표로 끝난다: \(line)")
+                for ending in ["습니다", "하세요", "됩니다", "합니다", "입니다"] {
+                    #expect(!line.contains(ending), "문장이다: \(line)")
+                }
             }
         }
+    }
+
+    // MARK: - 사외에서 설치한 사람
+
+    /// 집·카페에서 먼저 설치한 동료가 겪는 자리다. 사내 IP·서브넷·라우터를 알 길이 없어
+    /// **지금 채울 수 있는 것이 없고**, 사내에 가면 대개 이미 고정 IP 로 구성돼 있어 앱이
+    /// 그 값을 읽어 넣는다. 그러니 남은 일을 적을 것이 아니라 **곧 일어날 일**을 적어야 한다.
+    @Test("사외에서 값만 남았으면 언제 채워지는지 적는다")
+    func tellsWhenValuesWillArriveOutsideOffice() {
+        let outside = StatusModel.resolve(input(
+            config: .missing(path: "/tmp/none.json"), interface: SetupChecklistTests.outsideInfo
+        ))
+        #expect(outside.setupGaps == [.profiles])
+        #expect(outside.detail == SetupChecklist.valuesArriveInOffice)
+
+        // 예시 그대로인 경우도, Wi-Fi 이름만 없는 경우도 같은 자리다.
+        let example = StatusModel.resolve(input(
+            config: .pristineExample(path: "/tmp/x.json"), interface: SetupChecklistTests.outsideInfo
+        ))
+        #expect(example.detail == SetupChecklist.valuesArriveInOffice)
+
+        let noNames = StatusModel.resolve(input(
+            config: .ready(SetupChecklistTests.configWithoutWiFiNames),
+            interface: SetupChecklistTests.outsideInfo
+        ))
+        #expect(noNames.detail == SetupChecklist.valuesArriveInOffice)
+    }
+
+    /// 사내에서는 값을 채울 수 있다 — 곧 채워진다고 말할 자리가 아니다.
+    @Test("사내에서는 그 줄을 적지 않는다")
+    func doesNotPromiseAutoFillInsideOffice() {
+        #expect(StatusModel.resolve(input(config: .missing(path: "/tmp/none.json"))).detail == nil)
+        #expect(
+            StatusModel.resolve(input(config: .ready(SetupChecklistTests.configWithoutWiFiNames))).detail
+                == "사내 Wi-Fi 이름 미설정"
+        )
+    }
+
+    /// 구성을 못 읽었으면 어디에 있는지 모른다. 모르는 것을 안다고 말하지 않는다.
+    @Test("구성을 읽지 못했으면 짐작하지 않는다")
+    func doesNotGuessWhenConfigurationIsUnknown() {
+        let unknown = StatusModel.resolve(input(config: .missing(path: "/tmp/none.json"), interface: nil))
+        #expect(unknown.detail == nil)
+    }
+
+    /// 사외에서도 권한 설치는 지금 할 수 있다. 그것이 남아 있으면 그쪽이 먼저다.
+    @Test("권한이 남아 있으면 사외에서도 권한을 먼저 말한다")
+    func permissionsComeFirstEvenOutsideOffice() {
+        let outsideWithoutPermissions = StatusModel.resolve(input(
+            config: .missing(path: "/tmp/none.json"),
+            helperInstalled: false,
+            sudoersInstalled: false,
+            saveConfigInstalled: false,
+            interface: SetupChecklistTests.outsideInfo
+        ))
+        // 갈래가 둘(설치·값)이라 목록이 되지 않게 아무 줄도 적지 않는다 —
+        // 곧 채워진다는 말을 여기서 하면 지금 할 수 있는 설치를 미루게 한다.
+        #expect(outsideWithoutPermissions.detail == nil)
     }
 
     // MARK: - 설정 창과 같은 답을 낸다

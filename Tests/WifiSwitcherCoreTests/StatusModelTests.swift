@@ -92,8 +92,16 @@ struct StatusModelTests {
         // 이 상태의 머리말은 상태가 아니라 **할 일**이다 — 메뉴에서 그 줄이 곧 설정 창으로
         // 들어가는 문이라, '설정 필요' 라고만 적으면 문이라는 것이 읽히지 않는다.
         #expect(model.headline == "초기 설정하기")
-        // 설정 파일이 없다는 것은 머리말이 이미 말한 그 상태다. 딸린 줄을 붙이지 않는다.
-        #expect(model.detail == nil)
+        // 여기는 **사외(DHCP)** 다. 사내 값을 알 길이 없어 지금 채울 수 있는 것이 없으므로,
+        // 남은 일 대신 언제 채워지는지를 적는다 (`SetupChecklistTests` 가 갈래마다 확인한다).
+        #expect(model.detail == SetupChecklist.valuesArriveInOffice)
+
+        // 사내라면 값을 지금 채울 수 있다 — 설정 파일이 없다는 것은 머리말이 이미 말한
+        // 그 상태이므로 딸린 줄을 붙이지 않는다.
+        let inOffice = StatusModel.resolve(input(
+            config: .missing(path: "/tmp/none.json"), interface: Self.manualInfo
+        ))
+        #expect(inOffice.detail == nil)
     }
 
     @Test("설치 스크립트가 복사한 예시 그대로면 설정이 필요한 것으로 본다")

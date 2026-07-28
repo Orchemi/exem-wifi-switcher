@@ -204,9 +204,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 : "지금 고정 IP 로 연결됨 · 붙어 있는 Wi-Fi 와 그 값을 사내 프로필로 저장"
         } else {
             fill(ManualProfileDraft())
-            // 지금은 DHCP 다. 사내 값도, 사내 Wi-Fi 이름도 여기서는 알 수 없다 —
-            // 지금 붙어 있는 Wi-Fi(집·카페일 수 있다)를 사내 것으로 적어 두면 그 자리에서 고정 IP 가 걸린다.
-            introLabel.stringValue = "지금은 고정 IP 구성이 아님 · 사내 Wi-Fi 이름과 IP·서브넷·라우터 입력"
+            // **사외에서 처음 설치한 사람이 여기 선다.** 지금은 DHCP 라 사내 값도, 사내 Wi-Fi
+            // 이름도 여기서는 알 수 없다 — 지금 붙어 있는 Wi-Fi(집·카페일 수 있다)를 사내 것으로
+            // 적어 두면 그 자리에서 고정 IP 가 걸린다. **즉 지금 채울 수 있는 것이 없다.**
+            //
+            // 그러면 빈 칸 다섯 앞에서 무엇을 빠뜨렸는지 찾게 된다. 그래서 채우라고 하지 않고
+            // **언제 채워지는지**를 말한다 — 사내에 가면 대개 이미 고정 IP 로 구성돼 있어
+            // 그때 이 창을 열면 지금 구성이 그대로 들어온다. 값을 미리 받아 둔 사람을 위해
+            // 직접 넣는 길도 열어 둔 채다 (칸은 그대로 편집 가능하다).
+            //
+            // 권한 설치는 장소와 무관하므로 아래 권한 섹션은 지금 그대로 쓸 수 있다.
+            // 메뉴의 보조 줄(`SetupChecklist.valuesArriveInOffice`)과 **같은 낱말**로 적는다 —
+            // 같은 일을 두 자리에서 다르게 부르면 다른 일로 읽힌다.
+            // 줄바꿈을 뜻 단위로 못박는다 — 맡겨 두면 '지금 / 입력해도 됨' 처럼 한 구가 갈린다.
+            introLabel.stringValue = "지금은 고정 IP 구성이 아님 · 사내에서 열면 그때 구성이 그대로 채워짐"
+                + "\n값을 미리 알면 지금 입력해도 됨"
         }
 
         if case .unusable(_, let reason) = observation.config {

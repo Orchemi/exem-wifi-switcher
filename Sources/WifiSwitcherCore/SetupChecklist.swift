@@ -126,6 +126,9 @@ public enum SetupChecklist {
         return gaps
     }
 
+    /// 사외에서 값만 남았을 때 적는 한 줄. **남은 일이 아니라 곧 일어날 일이다.**
+    public static let valuesArriveInOffice = "사내에서 열면 값이 채워짐"
+
     /// 머리말('초기 설정하기') 아래에 붙일 보조 줄.
     ///
     /// **남은 일이 한 가지일 때만 그 일을 적는다.** 여럿이면 그 줄은 목록이 되는데,
@@ -134,7 +137,13 @@ public enum SetupChecklist {
     /// **일의 갈래는 셋이다** — 설치 한 번(`install.sh`)으로 놓는 것 · 승인 한 번으로 푸는 것 ·
     /// 설정 창에서 채우는 것. 갈래 하나만 남았을 때 적고, 둘 이상 남았으면 적지 않는다.
     /// 설치 쪽은 한 번에 둘이 함께 놓이므로 둘 다 빠졌으면 '권한 미설치' 한 줄로 묶는다.
-    public static func shortfall(_ gaps: [SetupGap]) -> String? {
+    ///
+    /// - Parameter interface: 지금 IPv4 구성. **사외에서 설치한 사람** 때문에 필요하다.
+    ///   그 사람에게는 사내 IP·서브넷·라우터를 알 길이 없어 값을 채울 방법이 지금 없다.
+    ///   그런데 사내에 가면 대개 이미 고정 IP 로 구성돼 있어 앱이 그 값을 그대로 읽어 넣는다 —
+    ///   **지금 할 일이 사실 없다.** 그 사실을 적지 않으면 '초기 설정하기' 가 며칠씩 떠 있는 동안
+    ///   무엇을 빠뜨렸는지 찾게 된다. 구성을 읽지 못했으면(nil) 짐작하지 않고 원래대로 적는다.
+    public static func shortfall(_ gaps: [SetupGap], interface: InterfaceInfo?) -> String? {
         let tasks = Set(gaps.map(\.task))
         guard tasks.count == 1, let task = tasks.first else { return nil }
 
@@ -142,10 +151,12 @@ public enum SetupChecklist {
         case .install:
             guard let only = gaps.first else { return nil }
             return gaps.count == 1 ? only.shortfall : "권한 미설치"
-        case .approve, .fillIn:
-            // 이 두 갈래 안의 갈림은 서로 배타적이라 남는 것이 언제나 하나다
-            // (묻지 않음 ↔ 거부됨 · 파일 없음 ↔ 예시 그대로 ↔ Wi-Fi 이름 없음).
+        case .approve:
+            // 이 갈래 안의 갈림은 서로 배타적이라 남는 것이 언제나 하나다 (묻지 않음 ↔ 거부됨).
             return gaps.first?.shortfall
+        case .fillIn:
+            guard let interface, !interface.isManual else { return gaps.first?.shortfall }
+            return valuesArriveInOffice
         }
     }
 }

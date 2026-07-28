@@ -242,7 +242,7 @@ public struct StatusModel: Equatable, Sendable {
             return StatusModel(
                 icon: .error,
                 headline: "초기 설정하기",
-                detail: SetupChecklist.shortfall(setupGaps),
+                detail: SetupChecklist.shortfall(setupGaps, interface: input.interface),
                 profiles: profiles,
                 activeProfileName: active?.name,
                 canSwitch: canSwitch,
