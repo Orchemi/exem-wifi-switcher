@@ -51,13 +51,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// Wi-Fi 이름 칸이 지금 편집 가능한가. **판단은 `SSIDFieldState` 가 한다** —
     /// 여기서는 그 답을 화면에 옮기기만 한다 (잠그는 조건과 그 이유는 그 타입에 적혀 있다).
     private var isSSIDEditable = true
-    /// Wi-Fi 이름 칸이 놓인 줄. 잠기면 칸의 테두리를 지우는데, 그때 글자가 테두리 안쪽
-    /// 여백만큼 왼쪽으로 밀린다 — 그만큼 줄을 들여 아래 칸들과 왼쪽 끝을 맞춘다.
+    /// Wi-Fi 이름 칸이 놓인 줄. 잠기면 칸의 테두리를 지우므로, 테두리가 차지하던 자리를
+    /// 이 줄의 여백으로 대신 채운다 (`lockedFieldInsets`).
     private var ssidRow: NSStackView?
-    /// 둥근 테두리가 글자를 안쪽으로 밀어 두는 폭. 테두리를 지운 뒤 그만큼 되돌린다.
-    /// **테두리가 있는 동안** 셀에게 물어 재 둔다 (지운 뒤에는 잴 수 없다).
-    /// 숫자로 박지 않는 이유는 시스템 판마다 다를 수 있어서다.
-    private var ssidBezelInset: CGFloat = 0
+    /// 테두리가 글자 둘레에 두던 여백. 테두리를 지운 자리에 그대로 돌려준다.
+    ///
+    /// **테두리를 지운 것이 자리에는 아무 영향도 주지 않아야 한다** — 값의 왼쪽 끝도,
+    /// 글자가 앉는 높이도, 줄의 높이도 편집 가능할 때와 같아야 한다. 한쪽만 맞추면
+    /// 이 줄만 낮아져 아래 칸들과의 간격이 어긋난다.
+    ///
+    /// 숫자로 박지 않고 **테두리가 있는 동안 칸에게 물어** 잰다 (지운 뒤에는 잴 수 없다).
+    private var lockedFieldInsets = NSEdgeInsets()
     /// Wi-Fi 서비스를 못 찾았을 때만 남는 안내. 저장 실패 문구와 같은 줄을 쓰므로
     /// 상태로 들고 있다가 그 문구를 지울 때 되돌린다.
     private var serviceNotice: String?
@@ -237,36 +241,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         applySSIDLock()
     }
 
-    /// 잠금 상태를 칸과 안내 줄에 반영한다.
+    /// 잠금 상태를 칸에 반영한다.
     ///
     /// **잠겼다는 것이 보여야 한다.** 글자색만 흐리게 하면 편집 가능한 칸과 구분되지 않아
     /// (실기에서 확인했다) 눌러도 아무 일 없는 고장으로 읽힌다. 그래서 테두리를 지운다 —
     /// **'적는 칸' 이 아니라 '적힌 값' 으로 보이게** 하는 것이 이 칸의 사실에 맞다.
-    /// 흐린 글자색과 아래 한 줄이 그 판단을 거든다.
+    /// 모양이 그것을 말하므로 아래에 설명 줄을 따로 두지 않는다.
+    ///
+    /// 지운 테두리의 자리는 여백으로 그대로 채운다 — 잠겼다고 줄이 낮아지거나 값이 옆으로
+    /// 밀리면, 잠금과 상관없는 어긋남이 하나 생긴다.
     private func applySSIDLock() {
         ssidField.isEditable = isSSIDEditable
         ssidField.isSelectable = true
         ssidField.isBezeled = isSSIDEditable
         if isSSIDEditable { ssidField.bezelStyle = .roundedBezel }
         ssidField.textColor = isSSIDEditable ? .labelColor : .secondaryLabelColor
-        // 테두리가 사라진 만큼 줄을 들인다. 값의 왼쪽 끝이 아래 칸들과 어긋나면 그 자체가 눈에 걸린다.
-        ssidRow?.edgeInsets = NSEdgeInsets(
-            top: 0, left: isSSIDEditable ? 0 : ssidBezelInset, bottom: 0, right: 0
-        )
-        showSSIDLockHint()
-    }
-
-    /// 왜 잠겼는지 한 줄. 오류 줄과 자리를 나눠 쓴다 — 둘이 함께 필요한 순간이 없다.
-    private func showSSIDLockHint() {
-        guard let label = errorLabels[.ssids], let row = errorRows[.ssids] else { return }
-        guard !isSSIDEditable else {
-            row.isHidden = true
-            return
-        }
-        label.textColor = .secondaryLabelColor
-        // 왜 채워졌는지와 왜 못 고치는지를 한 구로. '사내에서는' 이 곧 되돌릴 자리(사외)를 가리킨다.
-        label.stringValue = "자동 입력 · 사내에서는 잠김"
-        row.isHidden = false
+        ssidRow?.edgeInsets = isSSIDEditable ? NSEdgeInsets() : lockedFieldInsets
     }
 
     /// 창이 열려 있는 동안 새 관측이 왔을 때 화면을 맞춘다.
@@ -730,10 +720,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             label.stringValue = ""
             errorRows[field]?.isHidden = true
         }
-        // 두 안내 줄 모두 오류와 자리를 나눠 쓴다 — 오류를 지웠으면 그 자리로 돌아온다.
+        // 안내 줄은 오류와 자리를 나눠 쓴다 — 오류를 지웠으면 그 자리로 돌아온다.
         noticeLabel.stringValue = serviceNotice ?? ""
         noticeLabel.isHidden = serviceNotice == nil
-        showSSIDLockHint()
     }
 
     private func fieldControl(for field: DraftField) -> NSTextField? {
@@ -929,10 +918,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         row.spacing = 6
         // 남는 폭은 입력 칸이 가져간다. 버튼이 없을 때 칸이 줄어들 이유가 없다.
         ssidField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        // 잠길 때 테두리만큼 줄을 들이려면 이 줄을 들고 있어야 한다 (`applySSIDLock`).
+        // 잠길 때 테두리 자리를 여백으로 채우려면 이 줄을 들고 있어야 한다 (`applySSIDLock`).
         ssidRow = row
-        ssidBezelInset = ssidField.cell?
-            .drawingRect(forBounds: NSRect(x: 0, y: 0, width: 200, height: 22)).minX ?? 0
+        lockedFieldInsets = Self.insets(replacingBezelOf: ssidField)
         return row
     }
 
@@ -957,6 +945,28 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         errorLabels[field] = errorLabel
         errorRows[field] = row
         return titleRow
+    }
+
+    /// 테두리가 글자 둘레에 두고 있는 여백을 잰다. **테두리가 있는 지금** 재야 한다.
+    ///
+    /// 세 방향을 다 재는 이유가 있다. 가로만 맞추면 값의 왼쪽 끝은 맞는데 줄이 6pt 낮아져
+    /// 아래 칸들과의 간격이 어긋나고, 위만 맞추면 글자는 제자리인데 줄 높이가 모자란다.
+    /// 위쪽은 **글자가 앉는 높이(베이스라인)** 로, 아래쪽은 남은 높이로 정한다.
+    private static func insets(replacingBezelOf field: NSTextField) -> NSEdgeInsets {
+        let probe = NSRect(x: 0, y: 0, width: 200, height: field.intrinsicContentSize.height)
+        let left = field.cell?.drawingRect(forBounds: probe).minX ?? 0
+        let bezeledHeight = field.intrinsicContentSize.height
+        let bezeledBaseline = field.firstBaselineOffsetFromTop
+
+        // 지운 뒤의 값을 재고 곧바로 되돌린다 (이 시점의 칸은 편집 가능한 모습이어야 한다).
+        field.isBezeled = false
+        let plainHeight = field.intrinsicContentSize.height
+        let plainBaseline = field.firstBaselineOffsetFromTop
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+
+        let top = bezeledBaseline - plainBaseline
+        return NSEdgeInsets(top: top, left: left, bottom: bezeledHeight - plainHeight - top, right: 0)
     }
 
     private static func makeField(placeholder: String) -> NSTextField {
