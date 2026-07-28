@@ -52,10 +52,31 @@ final class SwitchNotifier {
         Task { @MainActor in
             // 알림이 아예 허용되지 않는 앱이면 오류가 난다. 그때는 알림 없이 동작하되, 그 사실을 남긴다.
             let granted = (try? await center.requestAuthorization(options: [.alert])) ?? false
-            permission = granted ? .allowed : .denied
-            flushDeferred()
-            onPermissionChange?()
+            adopt(granted ? .allowed : .denied)
         }
+    }
+
+    /// 시스템에 지금 권한 상태를 **다시 묻는다.**
+    ///
+    /// 권한은 앱 밖에서 바뀐다 — 사용자는 시스템 설정에서 언제든 켜고 끈다. 그런데 `prepare()` 는
+    /// 기동 때 한 번만 묻는다. 다시 묻는 자리가 없으면 **거부했다가 나중에 켠 사용자에게 앱은
+    /// 영영 '알림 꺼짐' 이라고 말한다** — 고친 사람에게 안 고쳐졌다고 말하는 셈이다.
+    ///
+    /// **묻기만 한다.** 승인 창을 띄우지 않으므로(`PermissionProbe`) 아무 때나 불러도 사용자를 방해하지 않는다.
+    /// 아직 답을 기다리는 중이면 값이 그대로 `.pending` 으로 돌아오므로, 쌓아 둔 알림도 그대로 남는다.
+    func refresh() async {
+        // 번들 밖에서는 물어볼 곳이 없다 (`init` 참조).
+        guard center != nil else { return }
+        adopt(await PermissionProbe.notificationPermission())
+    }
+
+    /// 새로 알게 된 권한 상태를 받아들인다. 바뀐 것이 없으면 아무 일도 하지 않는다 —
+    /// 60초마다 도는 갱신이 메뉴를 매번 다시 그리게 두지 않는다.
+    private func adopt(_ next: NotificationPermission) {
+        guard next != permission else { return }
+        permission = next
+        flushDeferred()
+        onPermissionChange?()
     }
 
     func post(_ message: SwitchAnnouncement.Message) {

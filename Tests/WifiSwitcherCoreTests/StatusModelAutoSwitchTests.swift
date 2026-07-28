@@ -151,6 +151,49 @@ struct StatusModelAutoSwitchTests {
         }
     }
 
+    // MARK: - 권한이 바뀌면 표시도 따라 바뀐다
+    //
+    // 권한은 **앱 밖에서** 바뀐다. 사용자가 시스템 설정에서 켜고 돌아왔는데 메뉴가 그대로면,
+    // 고친 사람에게 안 고쳐졌다고 말하는 셈이다.
+    //
+    // 다시 읽는 시점(`SwitchNotifier.refresh` · `menuWillOpen` · 앱 활성화)은 시스템 상태에
+    // 매여 있어 단위 테스트로 잡을 수 없다. 대신 그 앞뒤를 못박는다 —
+    // **값이 바뀌면 모델의 출력이 반드시 따라 바뀐다**는 것. 조건부 표시가 한쪽으로만
+    // 동작하면(켤 때만 나타나고 끌 때 안 사라지면) 여기서 걸린다.
+
+    @Test("알림 권한이 허용으로 바뀌면 보조 줄과 조치 항목이 사라진다")
+    func followsNotificationPermissionBothWays() {
+        let hold = AutoSwitchHold.alreadyApplied(profile: "office")
+        let denied = StatusModel.resolve(input(hold: hold, notifications: .denied))
+        let allowed = StatusModel.resolve(input(hold: hold, notifications: .allowed))
+
+        // 꺼짐 → 표시
+        #expect(denied.needsNotificationPermission)
+        #expect(denied.autoSwitchNotes == ["Wi-Fi OFFICE-WIFI", "알림 꺼짐"])
+
+        // 허용 → 사라짐. 조치 항목만 거두고 보조 줄이 남으면 사용자는 여전히 꺼진 줄 안다.
+        #expect(!allowed.needsNotificationPermission)
+        #expect(allowed.autoSwitchNotes == ["Wi-Fi OFFICE-WIFI"])
+
+        // 두 모델이 실제로 다르다 — 메뉴는 모델이 바뀔 때만 다시 그린다(`StatusItemController.render`).
+        // 같은 값으로 판정되면 새로 읽어도 화면이 그대로 남는다.
+        #expect(denied != allowed)
+    }
+
+    @Test("위치 권한이 허용으로 바뀌면 보조 줄과 조치 항목이 사라진다")
+    func followsLocationPermissionBothWays() {
+        let blocked = StatusModel.resolve(input(ssid: .permissionDenied, hold: .locationPermissionDenied))
+        let granted = StatusModel.resolve(input(hold: .alreadyApplied(profile: "office")))
+
+        #expect(blocked.needsLocationPermission)
+        #expect(blocked.autoSwitchNotes == ["위치 권한 없음"])
+
+        #expect(!granted.needsLocationPermission)
+        #expect(granted.autoSwitchNotes == ["Wi-Fi OFFICE-WIFI"])
+
+        #expect(blocked != granted)
+    }
+
     @Test("전환할 수 없는 상태여도 자동 전환 토글은 유지된다")
     func keepsShowingWhenSetupIncomplete() {
         let model = StatusModel.resolve(StatusInput(

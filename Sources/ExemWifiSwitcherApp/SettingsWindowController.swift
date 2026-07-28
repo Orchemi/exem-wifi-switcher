@@ -273,7 +273,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case .install:
             beginInstaller(.install)
         case .openSettings(let pane):
-            guard let url = URL(string: pane.url) else { return }
+            // 알림은 우리 앱의 줄을 편 채로 연다 (`url(revealing:)`) — 긴 앱 목록에서 이름을 찾게 두지 않는다.
+            guard let url = URL(string: pane.url(revealing: Bundle.main.bundleIdentifier)) else { return }
             NSWorkspace.shared.open(url)
         case .runCommand(let command):
             copyToPasteboard(command, confirmingOn: sender)

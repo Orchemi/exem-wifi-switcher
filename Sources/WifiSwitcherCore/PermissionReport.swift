@@ -59,6 +59,10 @@ public enum SystemSettingsPane: Equatable, Sendable {
     case notifications
 
     /// 해당 화면으로 바로 가는 딥링크.
+    ///
+    /// 옛 환경설정 식별자(`com.apple.preference.*`)를 그대로 쓴다. 시스템 설정이 갈린 뒤에도
+    /// 각 화면이 `legacyBundleIdentifier` 로 이 이름을 달고 있어 macOS 26 에서도 그대로 열린다
+    /// (실측: 알림 → '알림' 창, 위치 → '위치 서비스' 창).
     public var url: String {
         switch self {
         case .locationServices:
@@ -66,6 +70,21 @@ public enum SystemSettingsPane: Equatable, Sendable {
         case .notifications:
             return "x-apple.systempreferences:com.apple.preference.notifications"
         }
+    }
+
+    /// 우리 앱의 줄을 펴 놓고 여는 딥링크.
+    ///
+    /// **알림 화면은 설치된 앱이 전부 늘어선 긴 목록이다.** 거기에 떨어뜨려 놓고 이름을 찾아
+    /// 스크롤하게 두면, 권한을 켜라고 안내해 놓고 정작 그 자리는 알아서 찾으라는 말이 된다.
+    /// `?id=<번들 식별자>` 를 붙이면 그 앱의 화면이 바로 열린다 (macOS 26 에서 확인).
+    ///
+    /// 위치 서비스에는 이런 손잡이가 없다 — 목록 자체가 화면이라 그대로 연다.
+    /// 식별자를 모르는 경우(번들 밖 실행)에도 화면까지는 열어 준다.
+    public func url(revealing bundleIdentifier: String?) -> String {
+        guard case .notifications = self,
+              let bundleIdentifier, !bundleIdentifier.isEmpty
+        else { return url }
+        return "\(url)?id=\(bundleIdentifier)"
     }
 
     /// 딥링크가 열리지 않는 경우를 위해 글로도 적어 둔다.

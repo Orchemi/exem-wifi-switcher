@@ -121,6 +121,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         timer.tolerance = watching ? 15 : 2
         refreshTimer = timer
 
+        // 시스템 설정에 다녀와 앱으로 돌아오면 권한을 다시 확인한다.
+        //
+        // 설정 창은 이미 자기 몫을 이렇게 챙기고 있다(`SettingsWindowController`). 그런데 그 창은
+        // **자기 화면만** 고쳐 그린다 — 메뉴가 읽는 값은 그대로 낡은 채로 남는다. 그래서 메뉴 쪽에도 둔다.
+        //
+        // 다만 이것만으로는 부족하다. 메뉴바 전용 앱(`.accessory`)은 상태 항목을 눌러도 활성화되지
+        // 않아, 설정 창을 열지 않은 사용자에게는 이 알림이 오지 않는다. 그 경로는 `menuWillOpen` 이 맡는다.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.refreshAndEvaluate() }
+        }
+
         // 메뉴바에 아이콘이 보이지 않을 때의 비상구 — 앱을 한 번 더 실행하면 설정 창이 열린다.
         DistributedNotificationCenter.default().addObserver(
             forName: AppDelegate.showSettingsRequest,
@@ -137,6 +152,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     ///
     /// **직접 부르지 마라.** 겹쳐 돌면 낡은 관측이 새 값을 덮어쓴다 — `refreshAndEvaluate()` 만이 문이다.
     private func readSystem() async {
+        // 알림 권한도 **관측값이다.** 시스템 설정에서 켜고 끈 것을 앱이 알아채는 자리가 여기밖에 없다
+        // (`SwitchNotifier.refresh`). 시스템을 읽으러 온 김에 함께 묻는다 — 아래 `probe.read` 가
+        // 서브프로세스를 서너 개 띄워 수백 ms 를 쓰는 것에 비하면 이 한 번의 조회는 값이 없다시피 하다.
+        //
+        // 먼저 묻는 데에는 이유가 있다. 메뉴를 여는 순간에도 이 경로로 들어오는데, 뒤에 두면
+        // 느린 관측이 끝날 때까지 메뉴가 낡은 '알림 꺼짐' 을 들고 있게 된다.
+        await notifier.refresh()
+
         let probe = self.probe
         let authorization = locationAuthority.state
         observation = await Task.detached(priority: .utility) { probe.read(locationAuthorization: authorization) }.value
@@ -251,16 +274,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         Task { await refreshAndEvaluate() }
     }
 
-    @objc private func openLocationSettings() {
-        guard let url = URL(
-            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices"
-        ) else { return }
+    /// 시스템 설정의 해당 화면을 연다.
+    ///
+    /// **주소는 코어(`SystemSettingsPane`)가 들고 있다.** 설정 창의 같은 버튼과 한 자리를 쓴다 —
+    /// 두 벌로 적어 두면 한쪽만 고쳐진 채 조용히 갈라진다.
+    private func openSystemSettings(_ pane: SystemSettingsPane) {
+        guard let url = URL(string: pane.url(revealing: Bundle.main.bundleIdentifier)) else { return }
         NSWorkspace.shared.open(url)
     }
 
+    @objc private func openLocationSettings() {
+        openSystemSettings(.locationServices)
+    }
+
     @objc private func openNotificationSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") else { return }
-        NSWorkspace.shared.open(url)
+        openSystemSettings(.notifications)
     }
 
     // MARK: - 메뉴
@@ -353,6 +381,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         // 열자마자 마지막 상태를 보여주고, 새로 읽은 값이 오면 열린 채로 갱신한다.
+        //
+        // **권한도 여기서 다시 읽는다**(`readSystem`). 메뉴를 여는 순간이 사용자가 상태를 확인하는
+        // 순간이고, 메뉴바 전용 앱에서는 이 순간이 시스템 설정에 다녀온 것을 알아챌 가장 확실한 자리다.
         Task { await refreshAndEvaluate() }
     }
 

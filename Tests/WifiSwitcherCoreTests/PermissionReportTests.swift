@@ -236,6 +236,20 @@ struct PermissionReportTests {
         }
     }
 
+    @Test("알림 딥링크는 우리 앱의 줄을 펴고 연다")
+    func notificationPaneRevealsApp() {
+        let revealed = SystemSettingsPane.notifications.url(revealing: "com.example.app")
+        #expect(revealed == "\(SystemSettingsPane.notifications.url)?id=com.example.app")
+
+        // 식별자를 모르면(번들 밖 실행) 화면까지는 연다 — 아무 데도 못 가는 것보다 낫다.
+        #expect(SystemSettingsPane.notifications.url(revealing: nil) == SystemSettingsPane.notifications.url)
+        #expect(SystemSettingsPane.notifications.url(revealing: "") == SystemSettingsPane.notifications.url)
+
+        // 위치 서비스는 목록 자체가 화면이라 붙일 것이 없다. 엉뚱한 질의를 달지 않는다.
+        #expect(SystemSettingsPane.locationServices.url(revealing: "com.example.app")
+            == SystemSettingsPane.locationServices.url)
+    }
+
     @Test("여러 항목이 어긋나도 각자의 조치를 따로 낸다")
     func independentRemedies() {
         let report = PermissionReport.resolve(
@@ -275,5 +289,42 @@ struct PermissionSourceParityTests {
         for phrase in ["./scripts/install.sh", "시스템 설정 > 알림", "위치 서비스"] {
             #expect(!text.contains(phrase), "진단이 '\(phrase)' 문구를 직접 들고 있다")
         }
+    }
+
+    @Test("시스템 설정 주소를 화면 쪽에 다시 적지 않는다")
+    func settingsURLsLiveInOnePlace() throws {
+        // 같은 주소를 메뉴와 설정 창에 따로 적어 두면, 한쪽만 고쳐진 채 조용히 갈라진다.
+        // (실제로 그렇게 두 벌이었다 — 주소는 `SystemSettingsPane` 한 곳에 있다)
+        for path in [
+            "Sources/ExemWifiSwitcherApp/StatusItemController.swift",
+            "Sources/ExemWifiSwitcherApp/SettingsWindowController.swift",
+        ] {
+            #expect(
+                try !source(path).contains("x-apple.systempreferences"),
+                "\(path) 가 시스템 설정 주소를 직접 들고 있다"
+            )
+        }
+    }
+
+    /// 권한은 **앱 밖에서** 바뀐다. 그 사실을 알아채는 것은 값이 아니라 **다시 읽는 시점**이고,
+    /// 그 시점은 시스템 상태에 매여 있어 단위 테스트로 잡을 수 없다.
+    ///
+    /// 잃어버리기는 쉽다 — 없어도 빌드가 되고 테스트가 통과하며, 화면은 기동 때 읽은 값을
+    /// 그럴듯하게 계속 보여준다. 그래서 **자리가 남아 있는지만** 소스로 확인한다
+    /// (판정을 한 곳에 모으는 위 테스트들과 같은 방식이다).
+    ///
+    /// 리팩터링으로 이름이 바뀌면 이 테스트가 걸린다. 그때는 **다시 읽는 자리가 남아 있는지
+    /// 확인하고** 이름을 고쳐라 — 테스트만 지우면 같은 버그가 조용히 돌아온다.
+    @Test("메뉴가 권한을 다시 읽는 자리를 잃지 않는다")
+    func menuRereadsPermissions() throws {
+        let controller = try source("Sources/ExemWifiSwitcherApp/StatusItemController.swift")
+        // 메뉴를 여는 순간 · 시스템 설정에 다녀와 돌아온 순간, 둘 다 갱신으로 이어져야 한다.
+        #expect(controller.contains("func menuWillOpen"))
+        #expect(controller.contains("didBecomeActiveNotification"), "설정에 다녀온 것을 알아챌 자리가 없다")
+        // 그 갱신이 알림 권한까지 다시 묻는가. 이것이 빠지면 기동 때 읽은 값이 영영 남는다.
+        #expect(controller.contains("notifier.refresh()"), "갱신이 알림 권한을 다시 묻지 않는다")
+
+        let notifier = try source("Sources/ExemWifiSwitcherApp/SwitchNotifier.swift")
+        #expect(notifier.contains("func refresh()"), "알림 권한을 다시 읽는 길이 없다")
     }
 }
