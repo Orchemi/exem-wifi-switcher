@@ -297,10 +297,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         NSWorkspace.shared.open(url)
     }
 
-    @objc private func openLocationSettings() {
-        openSystemSettings(.locationServices)
-    }
-
     @objc private func openNotificationSettings() {
         openSystemSettings(.notifications)
     }
@@ -309,25 +305,35 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     /// 메뉴는 네 무리다 — [지금 상태] · [프로필 고르기] · [자동 전환] · [앱]
     /// 무리마다 구분선을 넣어, 어디까지가 한 이야기인지 눈으로 끊기게 한다.
+    /// **빈 무리는 서지 않는다** — 고를 프로필이 없으면 그 자리는 통째로 없다 (`MenuLayout`).
     ///
     /// 그릴 것은 인자로 받는다 — 그리는 중간에 상태를 다시 계산하면 머리말과 아래 항목이
     /// 서로 다른 순간의 값을 말할 수 있다.
     private func rebuildMenu(_ model: StatusModel) {
         menu.removeAllItems()
 
-        // 첫 줄은 상태 한 마디이면서 설정 창으로 들어가는 문이다 (`MenuStyle.headline`).
-        // 설정이 아직 없는 상태에서는 `StatusModel` 이 문구를 '초기 설정하기' 로 바꿔 놓는다.
-        menu.addItem(MenuStyle.headline(
-            model.headline, target: self, action: #selector(openSettingsFromMenu)
-        ))
-        if let detail = model.detail, !detail.isEmpty {
-            menu.addItem(MenuStyle.secondary(detail))
+        // **구분선은 무리와 무리 사이에만 넣는다.** 무리가 사라지는 자리에서 구분선만 남으면
+        // 아무것도 나누지 않는 선이 되고, 둘이 붙으면 빈 칸처럼 보인다. 어떤 무리가 서는지는
+        // 코어가 정하고(`MenuLayout`), 항목을 내지 않는 무리는 애초에 오지 않는다.
+        for (index, section) in MenuLayout.sections(model).enumerated() {
+            if index > 0 { menu.addItem(.separator()) }
+            add(section, of: model)
         }
-        menu.addItem(.separator())
+    }
 
-        if model.profiles.isEmpty {
-            menu.addItem(MenuStyle.placeholder("등록된 프로필 없음"))
-        } else {
+    private func add(_ section: MenuSection, of model: StatusModel) {
+        switch section {
+        case .status:
+            // 첫 줄은 상태 한 마디이면서 설정 창으로 들어가는 문이다 (`MenuStyle.headline`).
+            // 설정이 아직 없는 상태에서는 `StatusModel` 이 문구를 '초기 설정하기' 로 바꿔 놓는다.
+            menu.addItem(MenuStyle.headline(
+                model.headline, target: self, action: #selector(openSettingsFromMenu)
+            ))
+            if let detail = model.detail, !detail.isEmpty {
+                menu.addItem(MenuStyle.secondary(detail))
+            }
+
+        case .profiles:
             for profile in model.profiles {
                 let item = NSMenuItem(
                     title: profile.displayName,
@@ -340,22 +346,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                 item.isEnabled = model.canSwitch
                 menu.addItem(item)
             }
+
+        case .autoSwitch:
+            addAutoSwitchItems(model)
+
+        case .app:
+            let settings = NSMenuItem(title: "설정…", action: #selector(openSettingsFromMenu), keyEquivalent: ",")
+            settings.target = self
+            menu.addItem(settings)
+
+            // macOS 관례는 '<앱 이름> 종료' 지만, 메뉴바 전용 앱에서 그 관례는 **긴 제품명 하나로
+            // 메뉴 폭을 정하는 값**을 치른다. 어느 앱의 메뉴인지는 이미 눌러서 연 아이콘이 말한다.
+            let quit = NSMenuItem(title: "종료", action: #selector(quit), keyEquivalent: "q")
+            quit.target = self
+            menu.addItem(quit)
         }
-
-        menu.addItem(.separator())
-        addAutoSwitchItems(model)
-
-        menu.addItem(.separator())
-
-        let settings = NSMenuItem(title: "설정…", action: #selector(openSettingsFromMenu), keyEquivalent: ",")
-        settings.target = self
-        menu.addItem(settings)
-
-        // macOS 관례는 '<앱 이름> 종료' 지만, 메뉴바 전용 앱에서 그 관례는 **긴 제품명 하나로
-        // 메뉴 폭을 정하는 값**을 치른다. 어느 앱의 메뉴인지는 이미 눌러서 연 아이콘이 말한다.
-        let quit = NSMenuItem(title: "종료", action: #selector(quit), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
     }
 
     /// 자동 전환 토글과, 그 아래 딸린 것들.
@@ -378,20 +383,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             menu.addItem(retry)
         }
 
-        // 이 두 항목은 누르면 메뉴가 닫히고 시스템 설정으로 넘어간다 — 그 뒤에 무엇을 해야 하는지
+        // 이 항목은 누르면 메뉴가 닫히고 시스템 설정으로 넘어간다 — 그 뒤에 무엇을 해야 하는지
         // 말할 자리가 메뉴에는 없다. 그래서 **누르기 전에** 툴팁으로 그 한 문장을 붙여 둔다.
         // 문장은 설정 창·알림과 같은 자리에서 온다 (`SystemSettingsPane.openGuidance`).
-        if model.needsLocationPermission {
-            let item = NSMenuItem(
-                title: "위치 권한 설정 열기…",
-                action: #selector(openLocationSettings),
-                keyEquivalent: ""
-            )
-            item.target = self
-            item.toolTip = SystemSettingsPane.locationServices.openGuidance
-            menu.addItem(item)
-        }
-
+        //
+        // **위치 권한에는 같은 항목을 두지 않는다.** 그 권한이 막혀 있으면 초기 설정이 끝나지 않은
+        // 상태라 이 무리 자체가 서지 않는다(`MenuLayout`) — 머리말이 '초기 설정하기' 로 말하고,
+        // 실제 조치는 설정 창의 권한 섹션이 버튼으로 처리한다.
         if model.needsNotificationPermission {
             let item = NSMenuItem(title: "알림 설정 열기…", action: #selector(openNotificationSettings), keyEquivalent: "")
             item.target = self

@@ -24,6 +24,7 @@ struct StatusModelAutoSwitchTests {
 
     private func input(
         autoSwitchEnabled: Bool = true,
+        location: LocationAuthorizationState = .granted,
         ssid: SSIDReading? = .connected("OFFICE-WIFI"),
         hold: AutoSwitchHold? = nil,
         notifications: NotificationPermission = .allowed
@@ -32,6 +33,7 @@ struct StatusModelAutoSwitchTests {
             config: .ready(StatusModelAutoSwitchTests.config),
             interface: StatusModelAutoSwitchTests.officeInfo,
             helperInstalled: true,
+            location: location,
             autoSwitchEnabled: autoSwitchEnabled,
             ssid: ssid,
             autoSwitchHold: hold,
@@ -44,7 +46,6 @@ struct StatusModelAutoSwitchTests {
         let model = StatusModel.resolve(input(hold: .alreadyApplied(profile: "office")))
         #expect(model.autoSwitchEnabled)
         #expect(model.autoSwitchNotes == ["Wi-Fi OFFICE-WIFI"])
-        #expect(!model.needsLocationPermission)
     }
 
     @Test("꺼져 있으면 군더더기를 붙이지 않는다")
@@ -52,18 +53,26 @@ struct StatusModelAutoSwitchTests {
         let model = StatusModel.resolve(input(autoSwitchEnabled: false, hold: .disabled))
         #expect(!model.autoSwitchEnabled)
         #expect(model.autoSwitchNotes.isEmpty)
-        #expect(!model.needsLocationPermission)
     }
 
-    @Test("위치 권한이 없으면 설정을 여는 항목을 내놓는다")
+    /// 위치 권한이 막힌 상태는 **자동 전환 무리의 일이 아니다.**
+    ///
+    /// 그 권한은 초기 설정의 필수 항목이라(`SetupChecklist`) 막혀 있으면 머리말이
+    /// '초기 설정하기' 로 남고, 켤 수도 끌 수도 없는 자동 전환 무리는 서지 않는다.
+    /// 예전에는 여기에 '위치 권한 설정 열기…' 항목을 내놓았는데, 이제 그 조치는
+    /// 설정 창의 권한 섹션이 버튼으로 처리한다 — 한 가지 일에 두 개의 문을 두지 않는다.
+    @Test("위치 권한이 막히면 자동 전환 무리 대신 머리말이 말한다")
     func surfacesLocationPermission() {
-        for reading in [SSIDReading.permissionDenied, .permissionNotDetermined] {
-            let hold: AutoSwitchHold = reading == .permissionDenied
-                ? .locationPermissionDenied : .locationPermissionRequired
-            let model = StatusModel.resolve(input(ssid: reading, hold: hold))
-            // 조치 항목과 함께, 지금 무엇이 막혀 있는지도 한 구로 남긴다.
-            #expect(model.needsLocationPermission)
-            #expect(model.autoSwitchNotes == ["위치 권한 없음"] || model.autoSwitchNotes == ["위치 권한 미승인"])
+        for (reading, location, hold) in [
+            (SSIDReading.permissionDenied, LocationAuthorizationState.denied, AutoSwitchHold.locationPermissionDenied),
+            (.permissionNotDetermined, .notDetermined, .locationPermissionRequired),
+        ] {
+            let model = StatusModel.resolve(input(location: location, ssid: reading, hold: hold))
+            #expect(model.headline == "초기 설정하기")
+            #expect(model.detail == "위치 권한 없음" || model.detail == "위치 권한 미승인")
+            #expect(!MenuLayout.sections(model).contains(.autoSwitch))
+            // 이유 자체는 잃지 않는다 — 진단은 여전히 그 한 구를 쓴다.
+            #expect(StatusModel.autoSwitchReason(hold, ssid: reading, profiles: model.profiles) != nil)
         }
     }
 
@@ -95,7 +104,6 @@ struct StatusModelAutoSwitchTests {
     func explainsWiFiOff() {
         let model = StatusModel.resolve(input(ssid: .wifiOff, hold: .wifiOff))
         #expect(model.autoSwitchNotes == ["Wi-Fi 꺼짐"])
-        #expect(!model.needsLocationPermission)
     }
 
     // MARK: - 멈춘 상태에서 빠져나오는 손잡이
@@ -180,15 +188,17 @@ struct StatusModelAutoSwitchTests {
         #expect(denied != allowed)
     }
 
-    @Test("위치 권한이 허용으로 바뀌면 보조 줄과 조치 항목이 사라진다")
+    @Test("위치 권한이 허용으로 바뀌면 자동 전환 무리가 돌아온다")
     func followsLocationPermissionBothWays() {
-        let blocked = StatusModel.resolve(input(ssid: .permissionDenied, hold: .locationPermissionDenied))
+        let blocked = StatusModel.resolve(input(location: .denied, ssid: .permissionDenied, hold: .locationPermissionDenied))
         let granted = StatusModel.resolve(input(hold: .alreadyApplied(profile: "office")))
 
-        #expect(blocked.needsLocationPermission)
-        #expect(blocked.autoSwitchNotes == ["위치 권한 없음"])
+        #expect(!MenuLayout.sections(blocked).contains(.autoSwitch))
+        #expect(blocked.detail == "위치 권한 없음")
 
-        #expect(!granted.needsLocationPermission)
+        // 허용되면 토글도 그 아래 상태 줄도 제자리로 돌아온다. 켜짐/꺼짐 값은 그대로다.
+        #expect(MenuLayout.sections(granted).contains(.autoSwitch))
+        #expect(granted.autoSwitchEnabled)
         #expect(granted.autoSwitchNotes == ["Wi-Fi OFFICE-WIFI"])
 
         #expect(blocked != granted)

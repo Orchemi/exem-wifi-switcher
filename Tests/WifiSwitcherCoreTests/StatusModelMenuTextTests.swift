@@ -192,7 +192,6 @@ struct StatusModelMenuTextTests {
             autoSwitchEnabled: true, ssid: .connected("OFFICE-WIFI"),
             autoSwitchHold: .alreadyApplied(profile: "office"), notifications: .allowed
         ))
-        #expect(!model.needsLocationPermission)
         #expect(!model.needsNotificationPermission)
         #expect(!model.canRetryAutoSwitch)
         #expect(!model.needsSetup)
@@ -266,17 +265,19 @@ struct StatusModelMenuTextTests {
         #expect(denied.needsNotificationPermission)
         #expect(denied.autoSwitchNotes == ["Wi-Fi OFFICE-WIFI", "알림 꺼짐"])
 
-        for (reading, hold) in [
-            (SSIDReading.permissionDenied, AutoSwitchHold.locationPermissionDenied),
-            (.permissionNotDetermined, .locationPermissionRequired),
-            (.permissionDenied, .busy),
+        // 위치 권한 쪽은 자동 전환 무리가 아니라 **머리말**이 맡는다 — 초기 설정의 필수 항목이라
+        // 막혀 있으면 그 무리 자체가 서지 않는다 (`MenuLayout`).
+        for (reading, location) in [
+            (SSIDReading.permissionDenied, LocationAuthorizationState.denied),
+            (.permissionNotDetermined, .notDetermined),
         ] {
             let model = StatusModel.resolve(StatusInput(
-                config: .ready(Self.config), interface: Self.officeInfo,
-                autoSwitchEnabled: true, ssid: reading, autoSwitchHold: hold
+                config: .ready(Self.config), interface: Self.officeInfo, location: location,
+                autoSwitchEnabled: true, ssid: reading, autoSwitchHold: .locationPermissionDenied
             ))
-            #expect(model.needsLocationPermission)
-            #expect(model.autoSwitchNotes.first?.contains("위치 권한") == true)
+            #expect(model.headline == "초기 설정하기")
+            #expect(model.detail?.contains("위치 권한") == true)
+            #expect(!MenuLayout.sections(model).contains(.autoSwitch))
         }
     }
 

@@ -141,8 +141,6 @@ public struct StatusModel: Equatable, Sendable {
     /// **머리말이 이미 말한 것은 여기 오지 않는다** — 같은 말이 두 번 적히면 무엇이 상태이고
     /// 무엇이 조치인지 구분이 사라진다.
     public private(set) var autoSwitchNotes: [String] = []
-    /// 위치 권한을 열어달라는 항목을 보여야 하는가
-    public private(set) var needsLocationPermission: Bool = false
     /// 자동 전환이 실패로 쉬거나 멈춰 있어, 지금 다시 시도할 손잡이를 내놓아야 하는가.
     ///
     /// 백오프·중단은 원래 **Wi-Fi 가 바뀌어야** 풀린다. 같은 자리에서 원인을 고친 사용자에게는
@@ -164,7 +162,6 @@ public struct StatusModel: Equatable, Sendable {
         var model = resolveNetworkState(input, setupGaps: setupGaps)
         model.setupGaps = setupGaps
         model.autoSwitchEnabled = input.autoSwitchEnabled
-        model.needsLocationPermission = input.autoSwitchEnabled && (input.ssid?.isPermissionProblem ?? false)
         model.canRetryAutoSwitch = input.autoSwitchEnabled && isStalled(input.autoSwitchHold)
         model.needsNotificationPermission = input.autoSwitchEnabled && input.notifications == .denied
         model.autoSwitchNotes = menuNotes(input, model: model)

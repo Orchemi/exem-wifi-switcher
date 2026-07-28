@@ -48,23 +48,6 @@ enum MenuStyle {
         return item
     }
 
-    /// 고를 것이 없는 자리를 채우는 줄 ("등록된 프로필 없음").
-    ///
-    /// 액션이 놓일 자리에 서지만 액션이 아니다. 주 항목과 같은 밝기로 두면 누를 수 있는 것처럼
-    /// 보이므로 색만 한 단 물린다 — 크기는 그대로다 (딸린 줄이 아니라 그 무리의 전부이므로).
-    static func placeholder(_ text: String) -> NSMenuItem {
-        let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        item.attributedTitle = NSAttributedString(
-            string: text,
-            attributes: [
-                .font: NSFont.menuFont(ofSize: 0),
-                .foregroundColor: NSColor.secondaryLabelColor,
-            ]
-        )
-        return item
-    }
-
     /// 위 항목에 딸린 보조 줄.
     static func secondary(_ text: String) -> NSMenuItem {
         let line = StatusModel.secondaryLine(text)
