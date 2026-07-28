@@ -48,19 +48,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// 네트워크 서비스 줄. **평소에는 숨어 있다** — 이 도구는 Wi-Fi 이름으로 판단하므로
     /// 고를 이유가 없다. Wi-Fi 서비스를 못 찾은 기기에서만 드러난다.
     private var serviceRow: NSGridRow?
-    /// Wi-Fi 이름 칸이 지금 편집 가능한가.
-    ///
-    /// **사내(고정 IP 구성)에서 이름이 채워져 있으면 잠근다.** 그 이름은 앱이 지금 접속한
-    /// Wi-Fi 에서 그대로 읽어 넣은 값이라 사람이 손댈 이유가 없고, 실수로 고치면 값이 다
-    /// 맞아도 자동 전환만 조용히 걸리지 않는다.
-    ///
-    /// **사외(DHCP)에서는 잠그지 않는다.** 사외에서 처음 설정하는 사람은 사내 Wi-Fi 이름을
-    /// 손으로 넣어야 하고, 잘못 넣은 이름을 고칠 자리도 거기뿐이다 — 이 창에 여는 버튼이 없으므로
-    /// 여기까지 잠그면 되돌릴 길이 사라진다.
-    ///
-    /// 사내인데 칸이 빈 경우(위치 권한이 없어 이름을 못 읽음)도 잠그지 않는다. 잠가 두면
-    /// 권한을 끝내 거부한 사람에게 남는 길이 없다.
+    /// Wi-Fi 이름 칸이 지금 편집 가능한가. **판단은 `SSIDFieldState` 가 한다** —
+    /// 여기서는 그 답을 화면에 옮기기만 한다 (잠그는 조건과 그 이유는 그 타입에 적혀 있다).
     private var isSSIDEditable = true
+    /// Wi-Fi 이름 칸이 놓인 줄. 잠기면 칸의 테두리를 지우는데, 그때 글자가 테두리 안쪽
+    /// 여백만큼 왼쪽으로 밀린다 — 그만큼 줄을 들여 아래 칸들과 왼쪽 끝을 맞춘다.
+    private var ssidRow: NSStackView?
+    /// 둥근 테두리가 글자를 안쪽으로 밀어 두는 폭. 테두리를 지운 뒤 그만큼 되돌린다.
+    /// **테두리가 있는 동안** 셀에게 물어 재 둔다 (지운 뒤에는 잴 수 없다).
+    /// 숫자로 박지 않는 이유는 시스템 판마다 다를 수 있어서다.
+    private var ssidBezelInset: CGFloat = 0
     /// Wi-Fi 서비스를 못 찾았을 때만 남는 안내. 저장 실패 문구와 같은 줄을 쓰므로
     /// 상태로 들고 있다가 그 문구를 지울 때 되돌린다.
     private var serviceNotice: String?
@@ -216,8 +213,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         // 설치 안내와 '저장할 때 인증을 받는다' 는 이제 아래 권한 섹션이 말한다.
         // 같은 말을 두 자리에서 하면 어느 쪽이 최신인지 알 수 없게 된다.
-        isSSIDEditable = !(observation.interface?.isManual == true) || ssidField.stringValue.isEmpty
-        applySSIDLock()
+        resolveSSIDField()
 
         serviceNotice = serviceFound ? nil : "Wi-Fi 서비스 없음 · 위에서 사용할 서비스 선택"
 
@@ -225,14 +221,38 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         showDNSReadFailureIfNeeded()
     }
 
-    /// 잠금 상태를 칸·버튼·안내 줄에 한 번에 반영한다.
+    /// 지금 관측으로 Wi-Fi 이름 칸의 값과 잠금을 다시 정한다.
     ///
-    /// **잠겼다는 것이 보여야 한다.** 눌러도 아무 일 없는 칸처럼 보이면 고장으로 읽힌다 —
-    /// 비활성 색으로 칠하고, 여는 손잡이를 옆에 둔다.
+    /// **한 번만 정하면 안 된다.** 첫 실행에서는 창이 열리는 순간 위치 권한이 아직 없어
+    /// 이름을 못 읽고, 이름은 사용자가 권한을 허용한 **뒤에** 들어온다. 그때 다시 정하지
+    /// 않으면 자동으로 채워진 이름이 편집 가능한 채로 남는다.
+    private func resolveSSIDField() {
+        let state = SSIDFieldState.resolve(
+            typed: ssidField.stringValue,
+            reading: observation.ssid,
+            interface: observation.interface
+        )
+        ssidField.stringValue = state.name
+        isSSIDEditable = state.isEditable
+        applySSIDLock()
+    }
+
+    /// 잠금 상태를 칸과 안내 줄에 반영한다.
+    ///
+    /// **잠겼다는 것이 보여야 한다.** 글자색만 흐리게 하면 편집 가능한 칸과 구분되지 않아
+    /// (실기에서 확인했다) 눌러도 아무 일 없는 고장으로 읽힌다. 그래서 테두리를 지운다 —
+    /// **'적는 칸' 이 아니라 '적힌 값' 으로 보이게** 하는 것이 이 칸의 사실에 맞다.
+    /// 흐린 글자색과 아래 한 줄이 그 판단을 거든다.
     private func applySSIDLock() {
         ssidField.isEditable = isSSIDEditable
         ssidField.isSelectable = true
+        ssidField.isBezeled = isSSIDEditable
+        if isSSIDEditable { ssidField.bezelStyle = .roundedBezel }
         ssidField.textColor = isSSIDEditable ? .labelColor : .secondaryLabelColor
+        // 테두리가 사라진 만큼 줄을 들인다. 값의 왼쪽 끝이 아래 칸들과 어긋나면 그 자체가 눈에 걸린다.
+        ssidRow?.edgeInsets = NSEdgeInsets(
+            top: 0, left: isSSIDEditable ? 0 : ssidBezelInset, bottom: 0, right: 0
+        )
         showSSIDLockHint()
     }
 
@@ -254,12 +274,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// **위치 권한을 방금 허용한 순간이 이 경로의 이유다.** 그때 Wi-Fi 이름이 처음으로 읽히는데,
     /// 창을 다시 열기 전에는 칸이 빈 채로 남아 있었다 — 권한을 받아 놓고도 손으로 넣게 되는 셈이다.
     ///
-    /// **사용자가 적어 둔 것은 건드리지 않는다.** 비어 있는 칸만 채운다.
+    /// **사용자가 적어 둔 것은 건드리지 않는다.** 비어 있는 칸만, 그것도 **고정 IP 로 돌고
+    /// 있을 때만** 채우고(사외에서 읽은 이름은 집·카페 이름이다), 채운 다음 **잠금을 다시
+    /// 정한다** — 이 경로로 들어온 이름이 잠기지 않은 채 남는 것이 실기에서 나온 고장이다.
+    /// 두 규칙 모두 `SSIDFieldState` 가 들고 있다.
+    ///
+    /// 다만 **사람이 적고 있는 중에는 손대지 않는다.** 적는 도중에 칸이 잠기면 그것이
+    /// 곧 고장이다 (사내인데 권한이 없어 이름을 손으로 넣는 자리에서 벌어진다).
+    /// 다 적고 칸을 떠나면 다음 관측이 잠근다.
     func update(observation: Observation) {
         self.observation = observation
-        if ssidField.stringValue.isEmpty, let ssid = observation.ssid.name {
-            ssidField.stringValue = ssid
-        }
+        if ssidField.currentEditor() == nil { resolveSSIDField() }
         refreshPermissions()
     }
 
@@ -904,6 +929,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         row.spacing = 6
         // 남는 폭은 입력 칸이 가져간다. 버튼이 없을 때 칸이 줄어들 이유가 없다.
         ssidField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        // 잠길 때 테두리만큼 줄을 들이려면 이 줄을 들고 있어야 한다 (`applySSIDLock`).
+        ssidRow = row
+        ssidBezelInset = ssidField.cell?
+            .drawingRect(forBounds: NSRect(x: 0, y: 0, width: 200, height: 22)).minX ?? 0
         return row
     }
 
