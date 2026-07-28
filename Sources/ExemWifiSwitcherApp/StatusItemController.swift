@@ -86,7 +86,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         notifier.prepare()
 
         locationAuthority.onChange = { [weak self] in
-            Task { @MainActor in await self?.refreshAndEvaluate() }
+            Task { @MainActor in
+                // 권한 상태는 앱을 띄운 **직후에도 한 번 늦게** 온다 (`LocationAuthority` 참조).
+                // 설정 창이 이미 열려 있으면 그 창의 권한 섹션도 함께 고쳐 그려야
+                // "권한 없음" 과 "Wi-Fi 이름 읽음" 이 한 화면에 남지 않는다.
+                self?.settingsWindow?.refreshPermissions()
+                await self?.refreshAndEvaluate()
+            }
         }
         if autoSwitchEnabled { locationAuthority.requestIfNeeded() }
 
@@ -175,7 +181,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             button.toolTip = [model.headline, model.detail].compactMap { $0 }.joined(separator: "\n")
             button.setAccessibilityTitle(model.headline)
         }
-        rebuildMenu()
+        rebuildMenu(model)
     }
 
     // MARK: - 자동 전환
@@ -259,17 +265,22 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     // MARK: - 메뉴
 
-    private func rebuildMenu() {
-        let model = self.model
+    /// 메뉴는 네 무리다 — [지금 상태] · [프로필 고르기] · [자동 전환] · [앱]
+    /// 무리마다 구분선을 넣어, 어디까지가 한 이야기인지 눈으로 끊기게 한다.
+    ///
+    /// 그릴 것은 인자로 받는다 — 그리는 중간에 상태를 다시 계산하면 머리말과 아래 항목이
+    /// 서로 다른 순간의 값을 말할 수 있다.
+    private func rebuildMenu(_ model: StatusModel) {
         menu.removeAllItems()
 
-        menu.addItem(statusHeader(model))
+        menu.addItem(MenuStyle.headline(model.headline))
+        if let detail = model.detail, !detail.isEmpty {
+            menu.addItem(MenuStyle.secondary(detail))
+        }
         menu.addItem(.separator())
 
         if model.profiles.isEmpty {
-            let item = NSMenuItem(title: "등록된 프로필 없음", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
+            menu.addItem(MenuStyle.placeholder("등록된 프로필 없음"))
         } else {
             for profile in model.profiles {
                 let item = NSMenuItem(
@@ -294,20 +305,24 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         settings.target = self
         menu.addItem(settings)
 
-        let quit = NSMenuItem(title: "\(InstallPaths.appName) 종료", action: #selector(quit), keyEquivalent: "q")
+        // macOS 관례는 '<앱 이름> 종료' 지만, 메뉴바 전용 앱에서 그 관례는 **긴 제품명 하나로
+        // 메뉴 폭을 정하는 값**을 치른다. 어느 앱의 메뉴인지는 이미 눌러서 연 아이콘이 말한다.
+        let quit = NSMenuItem(title: "종료", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
     }
 
-    /// 자동 전환 토글과, 그 아래 "지금 무엇을 보고 있는가" 한 줄.
+    /// 자동 전환 토글과, 그 아래 딸린 것들.
+    ///
+    /// 순서에 뜻이 있다 — **액션(토글) 먼저, 딸린 상태가 그 아래, 조치할 액션이 그다음.**
     private func addAutoSwitchItems(_ model: StatusModel) {
         let toggle = NSMenuItem(title: "자동 전환", action: #selector(toggleAutoSwitch), keyEquivalent: "")
         toggle.target = self
         toggle.state = model.autoSwitchEnabled ? .on : .off
         menu.addItem(toggle)
 
-        if let note = model.autoSwitchNote {
-            menu.addItem(secondaryItem(note))
+        for note in model.autoSwitchNotes {
+            menu.addItem(MenuStyle.secondary(note))
         }
 
         // 멈춰 있는 상태에서 빠져나오는 손잡이. 누를 이유가 있을 때만 나타난다.
@@ -319,7 +334,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         if model.needsLocationPermission {
             let item = NSMenuItem(
-                title: "위치 서비스 설정 열기…",
+                title: "위치 권한 설정 열기…",
                 action: #selector(openLocationSettings),
                 keyEquivalent: ""
             )
@@ -327,58 +342,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             menu.addItem(item)
         }
 
-        // 알림이 막혀 있으면 전환이 완전히 무성이 된다. 그 사실을 메뉴에 상시 남긴다.
-        if let note = model.notificationNote {
-            menu.addItem(secondaryItem(note))
-        }
         if model.needsNotificationPermission {
             let item = NSMenuItem(title: "알림 설정 열기…", action: #selector(openNotificationSettings), keyEquivalent: "")
             item.target = self
             menu.addItem(item)
         }
-    }
-
-    /// 누를 수 없는 설명 한 줄.
-    private func secondaryItem(_ text: String) -> NSMenuItem {
-        let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        item.attributedTitle = NSAttributedString(
-            string: text,
-            attributes: [
-                .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
-                .foregroundColor: NSColor.secondaryLabelColor,
-            ]
-        )
-        return item
-    }
-
-    /// 첫 줄(상태)과 둘째 줄(현재 값 또는 실패 이유)을 한 항목에 담는다.
-    private func statusHeader(_ model: StatusModel) -> NSMenuItem {
-        let item = NSMenuItem(title: model.headline, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-
-        let text = NSMutableAttributedString(
-            string: model.headline,
-            attributes: [
-                .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
-                .foregroundColor: NSColor.labelColor,
-            ]
-        )
-        if let detail = model.detail, !detail.isEmpty {
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.lineBreakMode = .byWordWrapping
-            paragraph.maximumLineHeight = 15
-            text.append(NSAttributedString(
-                string: "\n" + detail,
-                attributes: [
-                    .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                    .paragraphStyle: paragraph,
-                ]
-            ))
-        }
-        item.attributedTitle = text
-        return item
     }
 
     // MARK: - NSMenuDelegate

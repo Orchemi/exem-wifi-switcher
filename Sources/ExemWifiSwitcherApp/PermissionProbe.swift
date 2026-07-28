@@ -10,7 +10,13 @@ import WifiSwitcherCore
 enum PermissionProbe {
 
     /// 설정 창에서 부르는 길. 파일 확인과 `id -Gn` 이 메인 스레드를 잡지 않게 한다.
-    static func read(location: LocationAuthorizationState) async -> PermissionInput {
+    ///
+    /// - Parameter wifiNameVisible: 지금 Wi-Fi 이름을 읽고 있는가. 위치 권한 판정의 **물증**이다
+    ///   (`PermissionInput.wifiNameVisible` 참조).
+    static func read(
+        location: LocationAuthorizationState,
+        wifiNameVisible: Bool
+    ) async -> PermissionInput {
         let install = await Task.detached(priority: .userInitiated) { installState() }.value
         let notifications = await notificationPermission()
         return PermissionInput(
@@ -20,13 +26,17 @@ enum PermissionProbe {
             isAdministrator: install.administrator,
             installerAvailable: install.installer,
             location: location,
+            wifiNameVisible: wifiNameVisible,
             notifications: notifications
         )
     }
 
     /// `--diagnose` 에서 부르는 길. 한 번 찍고 끝나는 경로라 메인을 잠깐 붙잡아도 잃을 것이 없다
     /// (아직 실행 루프도 돌지 않는다).
-    static func readBlocking(location: LocationAuthorizationState) -> PermissionInput {
+    static func readBlocking(
+        location: LocationAuthorizationState,
+        wifiNameVisible: Bool
+    ) -> PermissionInput {
         let install = installState()
         return PermissionInput(
             applyInstalled: install.apply,
@@ -35,6 +45,7 @@ enum PermissionProbe {
             isAdministrator: install.administrator,
             installerAvailable: install.installer,
             location: location,
+            wifiNameVisible: wifiNameVisible,
             notifications: notificationPermissionBlocking()
         )
     }

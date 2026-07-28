@@ -86,6 +86,10 @@ struct StatusModelTests {
         #expect(model.needsSetup)
         #expect(!model.canSwitch)
         #expect(model.profiles.isEmpty)
+        // 무엇이 비었는지는 한 구로 적고, 어떻게 등록하는지는 설정 창이 말한다
+        // (앱은 이 상태에서 창을 바로 연다).
+        #expect(model.headline == "설정 필요")
+        #expect(model.detail == "사내 IP 미등록")
     }
 
     @Test("설치 스크립트가 복사한 예시 그대로면 설정이 필요한 것으로 본다")
@@ -105,14 +109,16 @@ struct StatusModelTests {
         #expect(!model.canSwitch)
     }
 
-    @Test("권한 스크립트가 없으면 그 사실과 해결 방법을 알린다")
+    @Test("권한 스크립트가 없으면 그 사실을 머리말에 남긴다")
     func reportsMissingHelper() {
         let model = StatusModel.resolve(input(interface: Self.manualInfo, helperInstalled: false))
         #expect(model.icon == .error)
         #expect(!model.canSwitch)
-        #expect(model.headline.contains("설치"))
-        // 무엇을 하면 되는지가 함께 있어야 한다 — 알 수 없는 실패처럼 보이면 안 된다.
-        #expect(model.detail?.contains("install.sh") == true)
+        #expect(model.headline == "전환 권한 미설치")
+        // 어디로 가면 되는지까지는 적는다 — 이 줄이 없으면 사용자가 막힌다.
+        // 다만 절차가 아니라 자리만 가리킨다 (터미널 명령을 적어 두면 앱이 대신 설치하게 된
+        // 지금도 낡은 안내로 남는다).
+        #expect(model.detail == "설정 창에서 설치")
         // 프로필 목록 자체는 그대로 보여준다 (무엇이 있는지는 알 수 있어야 한다).
         #expect(model.profiles.count == 2)
     }

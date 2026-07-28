@@ -16,6 +16,7 @@ struct PermissionReportTests {
         isAdministrator: Bool = true,
         installerAvailable: Bool = true,
         location: LocationAuthorizationState = .granted,
+        wifiNameVisible: Bool = false,
         notifications: NotificationPermission = .allowed
     ) -> PermissionInput {
         PermissionInput(
@@ -25,6 +26,7 @@ struct PermissionReportTests {
             isAdministrator: isAdministrator,
             installerAvailable: installerAvailable,
             location: location,
+            wifiNameVisible: wifiNameVisible,
             notifications: notifications
         )
     }
@@ -170,6 +172,24 @@ struct PermissionReportTests {
         #expect(item.remedy == .openSettings(.locationServices))
         // 곧 승인 창이 뜰 상태를 붉게 칠하지 않는다.
         #expect(!report.needsAttention)
+    }
+
+    /// Wi-Fi 이름이 읽히고 있다는 것은 **위치 권한이 있다는 증거**다.
+    ///
+    /// `CLLocationManager` 는 만든 직후 아직 정해지지 않은 값을 준다 — 실제 상태는 조금 뒤
+    /// 델리게이트로 온다. 그 사이의 값을 그대로 옮기면 "권한 없음" 과 "Wi-Fi 이름 읽음" 이
+    /// 한 화면에 함께 찍힌다. **둘 중 하나는 틀렸고, 틀린 쪽은 권한 표시다.**
+    @Test("Wi-Fi 이름이 읽히면 위치 권한을 '아직 묻지 않음' 으로 적지 않는다")
+    func locationEvidenceBeatsStaleStatus() {
+        let item = item(.location, input(location: .notDetermined, wifiNameVisible: true))
+        #expect(item.state == .satisfied)
+        #expect(item.advice == nil)
+        #expect(item.remedy == .none)
+    }
+
+    @Test("거부 상태는 증거로 덮지 않는다 — 그때는 이름이 읽힐 리 없다")
+    func deniedStaysDenied() {
+        #expect(item(.location, input(location: .denied, wifiNameVisible: true)).state == .actionNeeded)
     }
 
     // MARK: - 알림 권한

@@ -125,6 +125,13 @@ public struct PermissionInput: Equatable, Sendable {
     /// 번들 안에 설치 스크립트가 있는가. 없으면(번들 밖 실행) 앱이 설치를 대신할 수 없다
     public var installerAvailable: Bool
     public var location: LocationAuthorizationState
+    /// 지금 Wi-Fi 이름을 실제로 읽고 있는가.
+    ///
+    /// **이것이 위치 권한의 물증이다.** `CLLocationManager` 는 만든 직후 아직 정해지지 않은 값을
+    /// 돌려주고 실제 상태는 조금 뒤 델리게이트로 온다. 그 사이의 값을 그대로 옮기면
+    /// "위치 권한 아직 묻지 않음" 과 "Wi-Fi 이름 읽음" 이 한 화면에 함께 찍힌다.
+    /// 둘 중 하나는 틀렸고, 틀린 쪽은 권한 표시다.
+    public var wifiNameVisible: Bool
     public var notifications: NotificationPermission
 
     public init(
@@ -134,6 +141,7 @@ public struct PermissionInput: Equatable, Sendable {
         isAdministrator: Bool,
         installerAvailable: Bool,
         location: LocationAuthorizationState,
+        wifiNameVisible: Bool,
         notifications: NotificationPermission
     ) {
         self.applyInstalled = applyInstalled
@@ -142,6 +150,7 @@ public struct PermissionInput: Equatable, Sendable {
         self.isAdministrator = isAdministrator
         self.installerAvailable = installerAvailable
         self.location = location
+        self.wifiNameVisible = wifiNameVisible
         self.notifications = notifications
     }
 }
@@ -273,6 +282,17 @@ public struct PermissionReport: Equatable, Sendable {
     // MARK: - 위치 권한
 
     private static func location(_ input: PermissionInput) -> PermissionItem {
+        // 이름이 읽히고 있다면 권한은 있는 것이다. 관측된 사실이 아직 정해지지 않은 상태 값을 이긴다 —
+        // **모순된 두 줄을 나란히 찍는 것보다 나쁜 표시는 없다.**
+        if input.location == .notDetermined, input.wifiNameVisible {
+            return PermissionItem(
+                subject: .location,
+                state: .satisfied,
+                status: "허용됨",
+                advice: nil,
+                remedy: .none
+            )
+        }
         switch input.location {
         case .granted:
             return PermissionItem(

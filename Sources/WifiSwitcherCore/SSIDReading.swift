@@ -34,21 +34,36 @@ public enum SSIDReading: Equatable, Sendable {
         self == .permissionDenied || self == .permissionNotDetermined
     }
 
-    /// 메뉴에 한 줄로 적을 수 있는 설명. 어떤 상태든 말없이 사라지지 않게 한다.
+    /// 메뉴에 한 줄로 적는 상태. 어떤 상태든 말없이 사라지지 않게 한다.
+    ///
+    /// **문장이 아니라 짧은 명사구다.** 메뉴 폭은 가장 긴 항목이 정하므로, 여기 문장을 올리면
+    /// 그 한 줄 때문에 메뉴 전체가 넓어진다. 못 읽은 이유 같은 긴 사정은 `diagnosticText` 로 간다.
     public var statusText: String {
         switch self {
         case .connected(let ssid):
             return "Wi-Fi \(ssid)"
         case .notAssociated:
-            return "Wi-Fi 에 접속돼 있지 않습니다"
+            return "Wi-Fi 미접속"
         case .wifiOff:
-            return "Wi-Fi 가 꺼져 있습니다"
+            return "Wi-Fi 꺼짐"
         case .permissionNotDetermined:
-            return "위치 권한을 승인해야 Wi-Fi 이름을 읽습니다"
+            return "위치 권한 미승인"
         case .permissionDenied:
-            return "위치 권한이 없어 Wi-Fi 이름을 읽지 못합니다"
+            return "위치 권한 없음"
+        case .unavailable:
+            return "Wi-Fi 이름 읽기 실패"
+        }
+    }
+
+    /// `--diagnose` 한 줄. 여기서는 폭이 아니라 **사실**이 중요하므로 원인을 끝까지 남긴다.
+    public var diagnosticText: String {
+        switch self {
+        case .connected(let ssid):
+            return ssid
         case .unavailable(let reason):
-            return "Wi-Fi 이름을 읽지 못했습니다 — \(reason)"
+            return "읽지 못함 — \(reason)"
+        case .notAssociated, .wifiOff, .permissionNotDetermined, .permissionDenied:
+            return statusText
         }
     }
 }

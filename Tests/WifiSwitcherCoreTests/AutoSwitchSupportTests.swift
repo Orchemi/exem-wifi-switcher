@@ -26,15 +26,36 @@ struct SSIDReadingTests {
 
     @Test("모든 결과에 사람이 읽을 한 줄이 있다 — 조용히 사라지는 상태를 만들지 않는다")
     func everyReadingExplainsItself() {
-        let readings: [SSIDReading] = [
-            .connected("OFFICE-WIFI"), .notAssociated, .wifiOff,
-            .permissionDenied, .permissionNotDetermined, .unavailable("인터페이스 없음"),
-        ]
-        for reading in readings {
+        for reading in Self.everyReading {
             #expect(!reading.statusText.isEmpty)
+            #expect(!reading.diagnosticText.isEmpty)
         }
         #expect(SSIDReading.permissionDenied.statusText.contains("위치"))
     }
+
+    /// 메뉴에 올라가는 줄은 **짧은 명사구**다. 문장을 올리면 그 한 줄이 메뉴 폭을 정한다.
+    @Test("메뉴에 올릴 한 줄은 문장이 아니다")
+    func statusTextIsANounPhrase() {
+        #expect(SSIDReading.connected("OFFICE-WIFI").statusText == "Wi-Fi OFFICE-WIFI")
+        #expect(SSIDReading.wifiOff.statusText == "Wi-Fi 꺼짐")
+        #expect(SSIDReading.notAssociated.statusText == "Wi-Fi 미접속")
+        for reading in Self.everyReading {
+            #expect(!reading.statusText.contains("습니다"), "문장이다: \(reading.statusText)")
+            #expect(reading.statusText.count <= 24)
+        }
+    }
+
+    /// 진단은 폭이 아니라 사실이 중요하다 — 메뉴에서 덜어낸 원인을 여기서는 끝까지 적는다.
+    @Test("진단 한 줄은 못 읽은 이유를 끝까지 남긴다")
+    func diagnosticTextKeepsTheCause() {
+        #expect(SSIDReading.connected("OFFICE-WIFI").diagnosticText == "OFFICE-WIFI")
+        #expect(SSIDReading.unavailable("인터페이스 없음").diagnosticText.contains("인터페이스 없음"))
+    }
+
+    private static let everyReading: [SSIDReading] = [
+        .connected("OFFICE-WIFI"), .notAssociated, .wifiOff,
+        .permissionDenied, .permissionNotDetermined, .unavailable("인터페이스 없음"),
+    ]
 }
 
 /// 이벤트 묶기(디바운스) — 무한 루프를 막는 첫 겹.

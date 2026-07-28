@@ -43,7 +43,7 @@ struct StatusModelAutoSwitchTests {
     func showsObservedNetwork() {
         let model = StatusModel.resolve(input(hold: .alreadyApplied(profile: "office")))
         #expect(model.autoSwitchEnabled)
-        #expect(model.autoSwitchNote?.contains("OFFICE-WIFI") == true)
+        #expect(model.autoSwitchNotes == ["Wi-Fi OFFICE-WIFI"])
         #expect(!model.needsLocationPermission)
     }
 
@@ -51,41 +51,50 @@ struct StatusModelAutoSwitchTests {
     func silentWhenDisabled() {
         let model = StatusModel.resolve(input(autoSwitchEnabled: false, hold: .disabled))
         #expect(!model.autoSwitchEnabled)
-        #expect(model.autoSwitchNote == nil)
+        #expect(model.autoSwitchNotes.isEmpty)
         #expect(!model.needsLocationPermission)
     }
 
-    @Test("위치 권한이 없으면 그 사실과 조치를 메뉴에서 드러낸다")
+    @Test("위치 권한이 없으면 설정을 여는 항목을 내놓는다")
     func surfacesLocationPermission() {
         for reading in [SSIDReading.permissionDenied, .permissionNotDetermined] {
             let hold: AutoSwitchHold = reading == .permissionDenied
                 ? .locationPermissionDenied : .locationPermissionRequired
             let model = StatusModel.resolve(input(ssid: reading, hold: hold))
+            // 조치 항목과 함께, 지금 무엇이 막혀 있는지도 한 구로 남긴다.
             #expect(model.needsLocationPermission)
-            #expect(model.autoSwitchNote?.contains("위치") == true)
+            #expect(model.autoSwitchNotes == ["위치 권한 없음"] || model.autoSwitchNotes == ["위치 권한 미승인"])
         }
     }
 
-    @Test("중단됐으면 몇 번 실패했고 언제 다시 시도하는지 적는다")
+    @Test("중단됐으면 몇 번 실패했는지 적는다")
     func explainsGivingUp() {
         let model = StatusModel.resolve(input(hold: .givenUp(profile: "office", failures: 5)))
-        let note = model.autoSwitchNote ?? ""
+        let note = model.autoSwitchNotes.first ?? ""
         #expect(note.contains("5"))
         // 프로필은 사람이 읽는 이름으로 적는다.
         #expect(note.contains("사내 고정 IP"))
-        #expect(note.contains("Wi-Fi"))
+    }
+
+    @Test("다시 시도할 시각이 정해져 있으면 그 시각을 적는다")
+    func explainsBackoff() {
+        let retryAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let model = StatusModel.resolve(input(hold: .backoff(profile: "office", retryAt: retryAt)))
+        let note = model.autoSwitchNotes.first ?? ""
+        #expect(note.contains("재시도"))
+        #expect(note.contains(":"))
     }
 
     @Test("사용자가 손으로 고른 상태임을 알린다")
     func explainsManualOverride() {
         let model = StatusModel.resolve(input(hold: .manualOverride(profile: "auto")))
-        #expect(model.autoSwitchNote?.contains("수동") == true)
+        #expect(model.autoSwitchNotes.first?.contains("수동") == true)
     }
 
     @Test("Wi-Fi 가 꺼져 있으면 그렇게 적는다")
     func explainsWiFiOff() {
         let model = StatusModel.resolve(input(ssid: .wifiOff, hold: .wifiOff))
-        #expect(model.autoSwitchNote?.contains("Wi-Fi") == true)
+        #expect(model.autoSwitchNotes == ["Wi-Fi 꺼짐"])
         #expect(!model.needsLocationPermission)
     }
 
@@ -121,12 +130,14 @@ struct StatusModelAutoSwitchTests {
     //
     // 알림이 막히면 자동 전환은 **완전히 무성**이 된다. 메뉴바 아이콘까지 보이지 않는 환경이면
     // 사용자가 IP 가 바뀐 사실을 알 통로가 하나도 남지 않는다.
+    //
+    // 그 사실은 **'알림 설정 열기…' 항목 하나로** 전한다. 설명을 함께 적으면 메뉴에
+    // 산문이 한 줄 더 늘고, 그 한 줄이 메뉴 폭을 정한다.
 
-    @Test("알림이 거부돼 있으면 그 사실을 메뉴에 상시 남긴다")
+    @Test("알림이 거부돼 있으면 설정을 여는 항목을 내놓는다")
     func surfacesDeniedNotifications() {
         let model = StatusModel.resolve(input(notifications: .denied))
         #expect(model.needsNotificationPermission)
-        #expect(model.notificationNote?.contains("알림") == true)
 
         // 자동 전환이 꺼져 있으면 알릴 일 자체가 없다 — 재촉하지 않는다.
         #expect(!StatusModel.resolve(input(autoSwitchEnabled: false, notifications: .denied))
@@ -136,13 +147,11 @@ struct StatusModelAutoSwitchTests {
     @Test("허용됐거나 아직 답하지 않은 상태로는 재촉하지 않는다")
     func quietWhenNotificationsAreFine() {
         for permission in [NotificationPermission.allowed, .pending, .unavailable] {
-            let model = StatusModel.resolve(input(notifications: permission))
-            #expect(!model.needsNotificationPermission)
-            #expect(model.notificationNote == nil)
+            #expect(!StatusModel.resolve(input(notifications: permission)).needsNotificationPermission)
         }
     }
 
-    @Test("전환할 수 없는 상태여도 자동 전환 표시는 유지된다")
+    @Test("전환할 수 없는 상태여도 자동 전환 토글은 유지된다")
     func keepsShowingWhenSetupIncomplete() {
         let model = StatusModel.resolve(StatusInput(
             config: .missing(path: "/tmp/x.json"),
@@ -152,6 +161,7 @@ struct StatusModelAutoSwitchTests {
             autoSwitchHold: .configUnavailable
         ))
         #expect(model.autoSwitchEnabled)
-        #expect(model.autoSwitchNote != nil)
+        // 머리말과 그 보조 줄이 "설정 필요 / 사내 IP 미등록" 을 이미 말했다. 되풀이하지 않는다.
+        #expect(model.autoSwitchNotes.isEmpty)
     }
 }

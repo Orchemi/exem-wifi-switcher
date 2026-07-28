@@ -15,11 +15,29 @@ enum Diagnostics {
 
     static func run() {
         // 승인 창을 띄우지 않고 지금 상태만 본다 — 진단이 시스템을 바꾸면 안 된다.
-        let authorization = LocationAuthority().state
-        let observation = readOffMainThread(authorization: authorization)
+        let authority = LocationAuthority()
+        var authorization = authority.state
+        var observation = readOffMainThread(authorization: authorization)
+
+        // `CLLocationManager` 는 만든 직후 '아직 묻지 않음' 을 돌려주고, 실제 값은 위치 데몬과
+        // 이야기한 뒤에 온다. 한 번 찍고 끝나는 이 경로에는 그 순간이 오지 않아
+        // **"위치 권한 아직 묻지 않음" 과 "Wi-Fi 이름 <읽힘>" 이 나란히 찍혔다.**
+        //
+        // Wi-Fi 이름이 읽혔다면 권한은 있는 것이다 — 그때는 기다릴 것도 없이 답이 나와 있다.
+        // 읽히지도 않았고 상태도 정해지지 않았을 때만 잠깐 기다렸다가 다시 본다.
+        if observation.ssid.name == nil, authorization == .notDetermined {
+            authorization = authority.settledState()
+            if authorization != .notDetermined {
+                observation.ssid = readSSIDOffMainThread(authorization: authorization)
+            }
+        }
+
         let enabled = AutoSwitchPreferences.isEnabled(in: UserDefaults.standard)
         // 권한 판정은 설정 창과 **같은 자리**에서 가져온다. 여기서 문구를 따로 만들면 두 화면이 다른 답을 낸다.
-        let permissions = PermissionReport.resolve(PermissionProbe.readBlocking(location: authorization))
+        let permissions = PermissionReport.resolve(PermissionProbe.readBlocking(
+            location: authorization,
+            wifiNameVisible: observation.ssid.name != nil
+        ))
 
         var lines: [String] = []
         lines.append("\(InstallPaths.appName) 진단")
@@ -30,7 +48,7 @@ enum Diagnostics {
         lines.append("위치 권한      \(permissions.item(.location).diagnosticText)")
         lines.append("알림 권한      \(permissions.item(.notification).diagnosticText)")
         lines.append("네트워크 감시  \(networkWatchState())")
-        lines.append("Wi-Fi 이름     \(observation.ssid.statusText)")
+        lines.append("Wi-Fi 이름     \(observation.ssid.diagnosticText)")
         lines.append("자동 전환      \(enabled ? "켜짐" : "꺼짐")")
         lines.append("전환 권한      \(permissions.item(.switching).diagnosticText)")
         lines.append("저장 권한      \(permissions.item(.saving).diagnosticText)")
@@ -56,6 +74,25 @@ enum Diagnostics {
         let done = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .userInitiated).async {
             box.value = probe.read(locationAuthorization: authorization)
+            done.signal()
+        }
+        done.wait()
+        return box.value
+    }
+
+    /// 권한이 늦게 정해졌을 때 Wi-Fi 이름만 다시 읽는다.
+    ///
+    /// 전체 관측을 다시 돌리지 않는 이유: 나머지 값은 권한과 무관한데 서브프로세스만 여럿 더 뜬다.
+    /// (`SystemProbe.read` 와 같은 이유로 메인 스레드 밖에서 읽는다)
+    private static func readSSIDOffMainThread(authorization: LocationAuthorizationState) -> SSIDReading {
+        final class Box: @unchecked Sendable {
+            var value = SSIDReading.unavailable("아직 읽지 않았습니다")
+        }
+        let box = Box()
+        let reader = WiFiSSIDReader()
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            box.value = reader.read(authorization: authorization)
             done.signal()
         }
         done.wait()
@@ -102,10 +139,15 @@ enum Diagnostics {
             return "자동 전환이 꺼져 있다"
         case .hold(let reason):
             // 이유 문구는 메뉴와 같은 자리(StatusModel)에서 가져온다 — 두 벌로 갈라지지 않게.
-            let model = StatusModel.resolve(observation.statusInput(
-                action: .idle, autoSwitchEnabled: true, autoSwitchHold: reason
-            ))
-            return "전환하지 않는다 — \(model.autoSwitchNote ?? "이유를 특정하지 못했습니다")"
+            //
+            // 메뉴가 실제로 **올리는** 줄(`autoSwitchNote`)이 아니라 판정 자체를 묻는다.
+            // 메뉴는 머리말·액션 항목이 대신 말하는 이유를 걷어내지만, 진단에는 전부 필요하다.
+            let reasonText = StatusModel.autoSwitchReason(
+                reason,
+                ssid: observation.ssid,
+                profiles: observation.readyConfig?.profiles ?? []
+            )
+            return "전환하지 않는다 — \(reasonText ?? "이유를 특정하지 못했습니다")"
         }
     }
 }

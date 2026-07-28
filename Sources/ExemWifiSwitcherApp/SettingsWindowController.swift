@@ -200,12 +200,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// 읽기는 백그라운드에서 한다 — 파일 확인과 `id -Gn` 이 메인 스레드를 잡으면 창이 굳는다.
     /// **판정은 하지 않는다.** 읽은 값을 `PermissionReport` 에 넘기고 결과만 옮겨 적는다
     /// (`--diagnose` 가 쓰는 것과 같은 판정이다).
-    private func refreshPermissions() {
+    ///
+    /// 창 밖에서도 부른다 — 위치 권한 답이 늦게 오면(`LocationAuthority`) 그때 다시 그려야
+    /// 창에 낡은 판정이 남지 않는다.
+    func refreshPermissions() {
         permissionReadToken += 1
         let token = permissionReadToken
         let location = locationAuthorization()
+        // Wi-Fi 이름이 읽히고 있다는 것은 위치 권한이 있다는 물증이다. 판정에 함께 넘긴다.
+        let wifiNameVisible = observation.ssid.name != nil
         Task { @MainActor in
-            let report = PermissionReport.resolve(await PermissionProbe.read(location: location))
+            let report = PermissionReport.resolve(
+                await PermissionProbe.read(location: location, wifiNameVisible: wifiNameVisible)
+            )
             // 창을 여는 순간은 활성화되는 순간이기도 해서 읽기가 겹친다. 늦게 시작한 쪽이 먼저 끝나면
             // 낡은 답이 새 답을 덮으므로, 마지막으로 시작한 읽기만 화면에 옮긴다.
             guard token == permissionReadToken else { return }
