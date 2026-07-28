@@ -94,6 +94,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     private var observation = Observation.pending
     private var hasBeenShown = false
+    /// 이번 닫기는 미저장을 묻지 않는다 ([취소] · 저장 직후).
+    private var skipsUnsavedPrompt = false
 
     /// 창 너비와 라벨 열 너비를 못박는다.
     ///
@@ -160,6 +162,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     func present(observation: Observation) {
         self.observation = observation
+        // 이 창은 닫아도 살아 있다 (`isReleasedWhenClosed = false`). 지난번에 내려 둔
+        // '묻지 않기' 를 그대로 물려받으면 다음 사람이 조용히 값을 잃는다.
+        skipsUnsavedPrompt = false
         populate()
         // 창을 열 때마다 다시 확인한다 — 사용자가 시스템 설정에 다녀왔을 수 있다.
         refreshPermissions()
@@ -613,6 +618,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     private func presentInstallerSuccess(_ operation: BundledInstaller.Operation) {
+        // **권한을 다 갖춘 이 순간이 사람을 놓치는 자리다.** 설치가 끝나면 끝난 것처럼 느껴지는데
+        // 값은 아직 설정 파일에 없다 (사내에서는 칸이 저절로 차 있어 더 그렇게 보인다).
+        // 그래서 여기서 남은 한 걸음을 말하고, **그 자리에서 저장까지 갈 수 있게** 한다.
+        if operation == .install, hasUnsavedValues {
+            offerSaveAfterInstall()
+            return
+        }
+
         let alert = NSAlert()
         alert.alertStyle = .informational
         switch operation {
@@ -627,6 +640,25 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         }
         alert.addButton(withTitle: "확인")
         show(alert)
+    }
+
+    /// 설치 직후, 아직 저장되지 않은 값이 화면에 있을 때.
+    ///
+    /// 인증을 한 번 더 받는 값을 치르지만 **묻지 않고 대신 저장해 주지는 않는다** — 이 저장은
+    /// root 소유 파일을 갈아 끼우는 일이라 누른 적 없는 사람에게 일어나면 안 된다.
+    /// 대신 기본 버튼이 그 일을 하도록 두어 [Enter] 한 번으로 끝나게 한다.
+    private func offerSaveAfterInstall() {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "설치했습니다 · 한 걸음 남았습니다"
+        alert.informativeText = "화면의 값은 아직 저장되지 않았습니다. 저장해야 사내 프로필이 되고 "
+            + "자동 전환에 쓰입니다. 저장할 때 관리자 인증을 한 번 더 받습니다."
+        alert.addButton(withTitle: "값 저장")
+        alert.addButton(withTitle: "나중에")
+        show(alert) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.save()
+        }
     }
 
     /// 계획을 못 받아 온 이유를 그대로 옮긴다. 사유마다 할 수 있는 일이 다르다.
@@ -703,7 +735,55 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         }
 
         onSaved()
+        // 방금 저장했다. 창을 닫으면서 '저장하지 않았다' 고 물으면 안 된다 —
+        // 관측은 아직 옛 설정 파일을 들고 있어서 그대로 두면 그 질문이 나온다.
+        closeWithoutAsking()
+    }
+
+    /// 저장할 값이 화면에 있는데 설정 파일에는 없는 상태인가.
+    ///
+    /// **이 앱이 사람을 놓치는 자리가 여기다.** 권한을 다 갖추면 끝난 것처럼 느껴지는데
+    /// [저장] 이 한 걸음 더 남아 있고, 사내에서는 칸이 저절로 차 있어서 끝난 것처럼 보인다.
+    /// 저장할 수 없는 상태(빈 칸)에서는 놓칠 것도 없으므로 묻지 않는다.
+    private var hasUnsavedValues: Bool {
+        draft.hasRequiredValues && savedOfficeDraft != draft
+    }
+
+    private func closeWithoutAsking() {
+        skipsUnsavedPrompt = true
         close()
+    }
+
+    /// 창을 닫으려 할 때 마지막으로 한 번 잡는다.
+    ///
+    /// [취소] 와 저장 직후는 묻지 않는다 — 버리겠다고 누른 사람에게 다시 묻는 것은 방해다.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard hasUnsavedValues, !skipsUnsavedPrompt else { return true }
+        confirmClosingWithUnsavedValues()
+        return false
+    }
+
+    private func confirmClosingWithUnsavedValues() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "저장하지 않고 닫습니다"
+        alert.informativeText = "화면의 값은 아직 설정 파일에 없습니다. "
+            + "저장해야 사내 프로필이 되고 자동 전환에 쓰입니다."
+        alert.addButton(withTitle: "저장하고 닫기")
+        alert.addButton(withTitle: "저장 안 함")
+        alert.addButton(withTitle: "계속 편집")
+        show(alert) { [weak self] response in
+            guard let self else { return }
+            switch response {
+            case .alertFirstButtonReturn:
+                // 저장이 성공하면 그 경로가 창을 닫는다. 실패하면 창이 남아 사유를 보여준다.
+                self.save()
+            case .alertSecondButtonReturn:
+                self.closeWithoutAsking()
+            default:
+                break  // 계속 편집
+            }
+        }
     }
 
     /// 저장이 왜 안 됐는지, 그래서 지금 시스템이 어떤 상태인지 분명히 말한다.
@@ -731,7 +811,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     @objc private func cancel() {
-        close()
+        // 버리겠다고 누른 사람에게 버려도 되냐고 다시 묻지 않는다.
+        closeWithoutAsking()
     }
 
     // MARK: - 로그인 항목
