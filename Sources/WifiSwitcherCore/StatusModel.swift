@@ -186,19 +186,23 @@ public struct StatusModel: Equatable, Sendable {
 
         // 2) 설정이 없거나 못 쓰면 전환할 대상 자체가 없다.
         //
-        // **무엇이 비었는지**만 한 구로 적는다. 어떻게 등록하는지는 설정 창이 말한다
-        // (이 상태에서는 앱이 창을 바로 연다) — 절차를 메뉴에 옮겨 적으면 두 자리가 갈라진다.
+        // 이 상태의 머리말은 **상태가 아니라 할 일**을 적는다. 메뉴의 첫 줄은 눌러서 설정 창을
+        // 여는 자리인데(`MenuStyle.headline`), '설정 필요' 라고만 적어 두면 그 줄이 문이라는 것이
+        // 읽히지 않는다. 사용자가 지금 해야 하는 일이 하나뿐인 상태이므로 그 일을 그대로 적는다.
+        //
+        // 절차는 여기 적지 않는다 — 어떻게 등록하는지는 그 문을 열면 나오는 설정 창이 말한다.
         switch input.config {
         case .missing:
             return StatusModel(
-                icon: .error, headline: "설정 필요",
+                icon: .error, headline: "초기 설정하기",
                 detail: "사내 IP 미등록",
                 profiles: [], activeProfileName: nil, canSwitch: false, needsSetup: true
             )
         case .pristineExample:
             // 값이 없는 것과 예시가 그대로 남은 것은 사용자가 할 일이 같아도 **원인이 다르다.**
+            // 할 일은 머리말이 말하므로, 딸린 줄에는 그 다른 원인만 남긴다.
             return StatusModel(
-                icon: .error, headline: "설정 필요",
+                icon: .error, headline: "초기 설정하기",
                 detail: "예시 설정 그대로",
                 profiles: [], activeProfileName: nil, canSwitch: false, needsSetup: true
             )

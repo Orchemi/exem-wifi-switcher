@@ -190,7 +190,7 @@ struct StatusModelMenuTextTests {
             autoSwitchEnabled: true, ssid: .connected("OFFICE-WIFI"),
             autoSwitchHold: .configUnavailable
         ))
-        #expect(unset.headline == "설정 필요")
+        #expect(unset.headline == "초기 설정하기")
         // 무엇이 비었는지는 머리말에 딸린 보조 줄이 말한다.
         #expect(unset.detail == "사내 IP 미등록")
         #expect(unset.autoSwitchNotes.isEmpty)
@@ -207,8 +207,31 @@ struct StatusModelMenuTextTests {
     @Test("값이 없는 것과 예시가 남은 것을 구분한다")
     func distinguishesUnsetCauses() {
         let pristine = StatusModel.resolve(StatusInput(config: .pristineExample(path: "/tmp/x.json")))
-        #expect(pristine.headline == "설정 필요")
+        #expect(pristine.headline == "초기 설정하기")
         #expect(pristine.detail == "예시 설정 그대로")
+    }
+
+    /// 메뉴 첫 줄은 눌러서 설정 창을 여는 자리다(`MenuStyle.headline`). 설정이 아직 없는 상태에서
+    /// 그 줄에 상태만 적어 두면, 눌러야 하는 자리라는 사실이 어디에도 남지 않는다.
+    ///
+    /// 그래서 **온보딩이 필요한 상태의 머리말은 할 일**이어야 한다. 문구를 박제하지 않고
+    /// 성질만 확인한다 — '…하기' 로 끝나는 행동 문구인가.
+    @Test("설정이 필요한 상태의 머리말은 상태가 아니라 할 일이다")
+    func setupHeadlineIsAnAction() {
+        let unsetStates: [ConfigStatus] = [
+            .missing(path: "/tmp/none.json"),
+            .pristineExample(path: "/tmp/x.json"),
+        ]
+        for config in unsetStates {
+            let model = StatusModel.resolve(StatusInput(config: config))
+            #expect(model.needsSetup)
+            #expect(model.headline.hasSuffix("하기"), "머리말이 할 일로 읽히지 않는다: \(model.headline)")
+        }
+
+        // 반대쪽 — 손댈 것이 없는 정상 상태는 상태를 말한다. 행동 문구로 바뀌면 안 된다.
+        let ready = StatusModel.resolve(StatusInput(config: .ready(Self.config), interface: Self.officeInfo))
+        #expect(!ready.needsSetup)
+        #expect(!ready.headline.hasSuffix("하기"))
     }
 
     @Test("막힌 권한은 상태 한 줄과 조치 항목을 함께 낸다")

@@ -19,15 +19,24 @@ import WifiSwitcherCore
 /// 누를 수 없다는 사실과 흐리게 보이는 것은 별개이므로 각각 따로 정한다.
 enum MenuStyle {
 
-    /// 누를 수 없는 상태 한 마디 (메뉴 첫 줄). 색과 크기는 주 항목 그대로다.
-    static func headline(_ text: String) -> NSMenuItem {
-        let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
-        // **`isEnabled = false` 로 두지 않는다.** AppKit 은 비활성 항목을 통째로 흐리게 칠하고,
-        // 그 흐림은 `attributedTitle` 의 색을 덮어쓴다 (실측: 지정한 `labelColor` 가 회색으로 나왔다).
-        // 그러면 이 줄이 딸린 보조 줄과 같은 밝기가 되어, 메뉴에서 가장 중요한 한 마디가 묻힌다.
-        //
-        // 대신 **누를 것을 주지 않는다** — 동작이 없으므로 눌러도 아무 일이 없고,
-        // 접근성은 흐림 없이 그대로 읽힌다. (메뉴는 `autoenablesItems = false` 로 돌린다)
+    /// 메뉴 첫 줄. 지금 상태 한 마디이자, **설정 창으로 들어가는 문**이다.
+    /// 색과 크기는 주 항목 그대로다.
+    ///
+    /// **`isEnabled = false` 로 두지 않는다.** AppKit 은 비활성 항목을 통째로 흐리게 칠하고,
+    /// 그 흐림은 `attributedTitle` 의 색을 덮어쓴다 (실측: 지정한 `labelColor` 가 회색으로 나왔다).
+    /// 그러면 이 줄이 딸린 보조 줄과 같은 밝기가 되어, 메뉴에서 가장 중요한 한 마디가 묻힌다.
+    ///
+    /// 그래서 이 줄은 살아 있는 항목이고, **살아 있으면 AppKit 이 여느 항목처럼 하이라이트한다.**
+    /// 눌리는 것처럼 보이는데 아무 일도 없는 줄은 고장으로 읽힌다 — 색을 얻은 대가로 고장을
+    /// 하나 만든 셈이다. 그래서 동작을 준다.
+    ///
+    /// 여는 곳은 언제나 설정 창이다. 상태를 손볼 수 있는 자리(값 · 권한 · 로그인 항목)가 거기
+    /// 하나뿐이므로, 어떤 상태에서 눌러도 그 창이 다음 자리다. 설정이 아직 없는 상태에서는
+    /// 부르는 쪽이 문구 자체를 할 일로 바꿔 준다 (`StatusModel` 의 '초기 설정하기').
+    static func headline(_ text: String, target: AnyObject?, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: text, action: action, keyEquivalent: "")
+        item.target = target
+        // 메뉴는 `autoenablesItems = false` 로 돈다 — 활성 여부를 여기서 정한다.
         item.isEnabled = true
         item.attributedTitle = NSAttributedString(
             string: text,

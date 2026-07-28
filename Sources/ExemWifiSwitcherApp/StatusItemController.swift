@@ -301,7 +301,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func rebuildMenu(_ model: StatusModel) {
         menu.removeAllItems()
 
-        menu.addItem(MenuStyle.headline(model.headline))
+        // 첫 줄은 상태 한 마디이면서 설정 창으로 들어가는 문이다 (`MenuStyle.headline`).
+        // 설정이 아직 없는 상태에서는 `StatusModel` 이 문구를 '초기 설정하기' 로 바꿔 놓는다.
+        menu.addItem(MenuStyle.headline(
+            model.headline, target: self, action: #selector(openSettingsFromMenu)
+        ))
         if let detail = model.detail, !detail.isEmpty {
             menu.addItem(MenuStyle.secondary(detail))
         }

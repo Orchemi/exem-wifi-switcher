@@ -86,9 +86,9 @@ struct StatusModelTests {
         #expect(model.needsSetup)
         #expect(!model.canSwitch)
         #expect(model.profiles.isEmpty)
-        // 무엇이 비었는지는 한 구로 적고, 어떻게 등록하는지는 설정 창이 말한다
-        // (앱은 이 상태에서 창을 바로 연다).
-        #expect(model.headline == "설정 필요")
+        // 이 상태의 머리말은 상태가 아니라 **할 일**이다 — 메뉴에서 그 줄이 곧 설정 창으로
+        // 들어가는 문이라, '설정 필요' 라고만 적으면 문이라는 것이 읽히지 않는다.
+        #expect(model.headline == "초기 설정하기")
         #expect(model.detail == "사내 IP 미등록")
     }
 
