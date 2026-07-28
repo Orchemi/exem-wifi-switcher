@@ -379,7 +379,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         alert.informativeText = operation == .install
             ? "관리자 인증을 한 번 받습니다. 아래가 설치할 내용 전부입니다."
             : "관리자 인증을 한 번 받습니다. 아래 항목을 지웁니다 — 입력한 네트워크 값도 함께 지워집니다."
-        alert.accessoryView = Self.makePlanView(preview.plan)
+        alert.accessoryView = InstallPlanView.make(preview.plan)
 
         let confirmButton = alert.addButton(withTitle: operation.title)
         if operation == .uninstall { confirmButton.hasDestructiveAction = true }
@@ -487,24 +487,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private func show(_ alert: NSAlert, then handler: ((NSApplication.ModalResponse) -> Void)? = nil) {
         guard let window else { return }
         alert.beginSheetModal(for: window) { response in handler?(response) }
-    }
-
-    /// 계획 전문을 담는 상자. 스크롤되고 선택할 수 있다 — 읽고 확인하라고 내놓은 글이다.
-    private static func makePlanView(_ text: String) -> NSView {
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 200))
-        textView.string = text
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.drawsBackground = false
-        textView.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        textView.textContainerInset = NSSize(width: 6, height: 6)
-
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 200))
-        scroll.documentView = textView
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        scroll.autohidesScrollers = true
-        return scroll
     }
 
     // MARK: - 저장
