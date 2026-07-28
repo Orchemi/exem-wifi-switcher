@@ -163,13 +163,16 @@ struct PermissionReportTests {
         #expect(item.advice?.contains("자동 전환") == true)
     }
 
-    @Test("아직 묻지 않은 위치 권한은 문제로 세지 않는다")
+    @Test("아직 묻지 않았으면 시스템 설정이 아니라 승인 창으로 간다")
     func locationNotDetermined() {
         let report = PermissionReport.resolve(input(location: .notDetermined))
         let item = report.item(.location)
         #expect(item.state == .undetermined)
-        #expect(item.advice != nil)
-        #expect(item.remedy == .openSettings(.locationServices))
+        // 창 하나면 끝날 일이다. 목록으로 보내 우리 줄을 찾게 하는 것은 일을 어렵게 만드는 것이다.
+        #expect(item.remedy == .requestLocationPermission)
+        // 버튼이 조치를 말하므로, 그 자리에 남는 줄은 '왜 필요한가' 다.
+        #expect(item.advice == nil)
+        #expect(item.note == item.purpose)
         // 곧 승인 창이 뜰 상태를 붉게 칠하지 않는다.
         #expect(!report.needsAttention)
     }

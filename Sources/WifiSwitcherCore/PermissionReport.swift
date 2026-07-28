@@ -160,6 +160,12 @@ public enum PermissionRemedy: Equatable, Sendable {
     /// 터미널에서 직접 실행해야 한다. 번들 안에 설치 스크립트가 없을 때의 길이다
     case runCommand(String)
     case openSettings(SystemSettingsPane)
+    /// 앱이 위치 권한 승인 창을 띄운다.
+    ///
+    /// 아직 묻지 않은 상태에서만 쓴다. 이때는 **시스템 설정까지 보낼 이유가 없다** —
+    /// 목록에서 우리 줄을 찾게 하는 대신 창 하나로 끝난다.
+    /// (한 번 거부한 뒤에는 이 창이 다시 뜨지 않으므로 그때는 `openSettings` 다)
+    case requestLocationPermission
 }
 
 /// 권한 한 줄.
@@ -176,14 +182,17 @@ public struct PermissionItem: Equatable, Sendable {
     public var title: String { subject.title }
     public var purpose: String { subject.purpose }
 
-    /// 화면에 붙는 설명 한 줄 — 어긋났으면 조치를, 아니면 왜 필요한지를 적는다.
+    /// 화면에 붙는 설명 한 줄 — 조치가 따로 있으면 그것을, 아니면 왜 필요한지를 적는다.
     /// 둘을 함께 쌓으면 네 항목이 여덟 줄이 된다.
     public var note: String { advice ?? purpose }
 
     /// `--diagnose` 한 줄. 화면과 **같은 판정에서** 나온다.
+    ///
+    /// 터미널에는 누를 버튼이 없다 — 화면에서 버튼이 대신 말하던 몫까지 글로 적어야 하므로,
+    /// 손볼 것이 있으면 화면과 같은 설명 줄(`note`)을 함께 싣는다.
     public var diagnosticText: String {
-        guard let advice else { return status }
-        return "\(status) — \(advice)"
+        guard state != .satisfied else { return status }
+        return "\(status) — \(note)"
     }
 }
 
@@ -273,15 +282,14 @@ public struct PermissionReport: Equatable, Sendable {
     ///
     /// 앱이 설치할 수 있으면 버튼 하나로 끝난다. 번들 밖에서 돌고 있으면 그럴 수 없으므로
     /// 터미널 명령을 내민다 — **할 수 없는 것을 할 수 있는 척하지 않는다.**
-    private static func installRemedy(_ input: PermissionInput) -> (advice: String, remedy: PermissionRemedy) {
+    ///
+    private static func installRemedy(_ input: PermissionInput) -> (advice: String?, remedy: PermissionRemedy) {
         guard input.installerAvailable else {
             return (
                 "터미널에서 \(installCommand) 를 실행하세요. (앱 번들 밖에서 실행 중이라 여기서 설치할 수 없습니다)",
                 .runCommand(installCommand)
             )
         }
-        // 이 문구는 설정 창과 `--diagnose` 가 함께 쓴다. 터미널에는 누를 버튼이 없으므로
-        // "아래 버튼" 이 아니라 **버튼이 어디 있는지**를 적는다 — 두 자리에서 다 맞는 말이어야 한다.
         return (
             "설정 창의 [설치] 를 누르면, 무엇을 설치할지 보여주고 관리자 인증을 한 번 받습니다.",
             .install
@@ -302,12 +310,16 @@ public struct PermissionReport: Equatable, Sendable {
             )
         }
         // 스크립트만 있고 규칙이 없으면 겉보기에는 설치된 상태다. 전환할 때마다 암호를 물어 실패한다.
+        // 이쪽은 **상태만 봐서는 알 수 없는 사실**이라 한 줄을 남긴다 (설치 절차가 아니라 증상이다).
         guard input.sudoersInstalled else {
             return PermissionItem(
                 subject: .switching,
                 state: .actionNeeded,
                 status: "무암호 규칙 없음",
-                advice: "전환 스크립트는 있지만 sudoers 규칙이 없어 전환이 실패합니다. " + install.advice,
+                advice: [
+                    "전환 스크립트는 있지만 sudoers 규칙이 없어 전환이 실패합니다.",
+                    install.advice,
+                ].compactMap { $0 }.joined(separator: " "),
                 remedy: install.remedy
             )
         }
@@ -386,13 +398,14 @@ public struct PermissionReport: Equatable, Sendable {
                 remedy: .openSettings(.locationServices)
             )
         case .notDetermined:
+            // 아직 묻지 않았으면 **묻는 것이 답이다.** 시스템 설정 목록으로 보내고 우리 줄을
+            // 찾게 하는 것은, 창 하나면 끝날 일을 굳이 어렵게 만드는 것이다.
             return PermissionItem(
                 subject: .location,
                 state: .undetermined,
                 status: "아직 묻지 않음",
-                advice: "자동 전환을 켜면 승인 창이 뜹니다. 창을 닫았다면 "
-                    + SystemSettingsPane.locationServices.openGuidance,
-                remedy: .openSettings(.locationServices)
+                advice: nil,
+                remedy: .requestLocationPermission
             )
         }
     }

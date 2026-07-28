@@ -42,6 +42,8 @@ struct SetupChecklistTests {
         helperInstalled: Bool = true,
         sudoersInstalled: Bool = true,
         saveConfigInstalled: Bool = true,
+        location: LocationAuthorizationState = .granted,
+        ssid: SSIDReading? = nil,
         action: ActionState = .idle,
         notifications: NotificationPermission = .allowed
     ) -> StatusInput {
@@ -51,7 +53,9 @@ struct SetupChecklistTests {
             helperInstalled: helperInstalled,
             sudoersInstalled: sudoersInstalled,
             saveConfigInstalled: saveConfigInstalled,
+            location: location,
             action: action,
+            ssid: ssid,
             notifications: notifications
         )
     }
@@ -124,18 +128,54 @@ struct SetupChecklistTests {
         #expect(model.detail == "192.0.2.10 → 192.0.2.1")
     }
 
-    @Test("위치·알림 권한은 초기 설정에 넣지 않는다")
-    func optionalPermissionsAreNotSetup() {
+    @Test("위치 권한이 없으면 — 값이 다 있어도 — 초기 설정하기")
+    func locationPermissionIsRequired() {
+        // 위치 권한이 없으면 Wi-Fi 이름을 읽지 못하고, 그러면 사용자가 사내 Wi-Fi 이름을
+        // **손으로** 넣어야 한다. 이 도구의 목적이 "사람이 아무것도 누르지 않는 것" 인데
+        // 시작부터 그 반대를 시키는 셈이라, 선택이 아니라 필수로 둔다 (2026-07-28 오너 판단).
+        let denied = StatusModel.resolve(input(location: .denied, ssid: .permissionDenied))
+        #expect(denied.setupGaps == [.locationPermissionDenied])
+        #expect(denied.headline == Self.setupHeadline)
+        #expect(denied.detail == "위치 권한 없음")
+
+        let notAsked = StatusModel.resolve(input(location: .notDetermined, ssid: .permissionNotDetermined))
+        #expect(notAsked.setupGaps == [.locationPermissionNotAsked])
+        #expect(notAsked.headline == Self.setupHeadline)
+        #expect(notAsked.detail == "위치 권한 미승인")
+    }
+
+    @Test("필수라고 해서 기능을 잠그지는 않는다")
+    func requiredLocationDoesNotLockTheApp() {
+        // 자동 전환을 포기하고 손으로 쓰겠다는 사용자의 길까지 막을 이유는 없다.
+        // 체크리스트에 남아 계속 안내하되, 프로필은 그대로 누를 수 있어야 한다.
+        let denied = StatusModel.resolve(input(location: .denied, ssid: .permissionDenied))
+        #expect(denied.canSwitch)
+        #expect(denied.profiles.count == 2)
+        #expect(denied.activeProfileName == "office")
+        // 창을 자동으로 띄우지도 않는다 — 거부한 사람에게 로그인마다 창이 뜨면 그것은 소음이다.
+        #expect(!denied.needsSetup)
+    }
+
+    @Test("Wi-Fi 이름이 읽히고 있으면 권한은 갖춰진 것으로 본다")
+    func wifiNameIsProofOfPermission() {
+        // `CLLocationManager` 는 만든 직후 '아직 묻지 않음' 을 돌려준다. 그 값을 그대로 믿으면
+        // 이름을 읽고 있는데도 '위치 권한 미승인' 이 뜬다 — 관측된 사실이 상태 값을 이긴다.
+        let model = StatusModel.resolve(input(location: .notDetermined, ssid: .connected("OFFICE-WIFI")))
+        #expect(model.setupGaps.isEmpty)
+        #expect(model.headline != Self.setupHeadline)
+    }
+
+    @Test("알림 권한은 여전히 선택이다")
+    func notificationPermissionStaysOptional() {
         // 알림을 뜻해서 거부한 사용자에게 '초기 설정하기' 가 영영 떠 있으면 잘못된 신호다.
-        // 없어도 수동 전환은 되므로, 그쪽은 보조 줄과 조치 항목이 안내한다.
+        // 없어도 전환은 그대로 되므로, 그쪽은 보조 줄과 조치 항목이 안내한다.
         let denied = StatusModel.resolve(StatusInput(
             config: .ready(Self.config), interface: Self.officeInfo,
-            autoSwitchEnabled: true, ssid: .permissionDenied,
-            autoSwitchHold: .locationPermissionDenied, notifications: .denied
+            autoSwitchEnabled: true, ssid: .connected("OFFICE-WIFI"),
+            autoSwitchHold: .alreadyApplied(profile: "office"), notifications: .denied
         ))
         #expect(denied.setupGaps.isEmpty)
         #expect(denied.headline != Self.setupHeadline)
-        #expect(denied.needsLocationPermission)
         #expect(denied.needsNotificationPermission)
     }
 
@@ -184,6 +224,11 @@ struct SetupChecklistTests {
         #expect(noPermissions.setupGaps == [.switchingPermission, .savingPermission])
         #expect(noPermissions.detail == "권한 미설치")
 
+        // 갈래가 다르면 묶이지 않는다. 설치와 승인은 사용자가 하는 일이 서로 다르다.
+        let installAndApprove = StatusModel.resolve(input(helperInstalled: false, location: .denied))
+        #expect(installAndApprove.setupGaps == [.switchingPermission, .locationPermissionDenied])
+        #expect(installAndApprove.detail == nil)
+
         // 권한도 값도 남았으면 그 줄은 목록이 된다. 메뉴는 문서가 아니므로 적지 않는다 —
         // 무엇무엇이 남았는지는 눌러서 여는 설정 창이 들고 있다.
         let nothingDone = StatusModel.resolve(input(
@@ -203,6 +248,7 @@ struct SetupChecklistTests {
         let gaps: [[SetupGap]] = [
             [.switchingPermission], [.savingPermission], [.profiles],
             [.exampleProfiles], [.wifiNames], [.switchingPermission, .savingPermission],
+            [.locationPermissionNotAsked], [.locationPermissionDenied],
         ]
         for combination in gaps {
             guard let line = SetupChecklist.shortfall(combination) else { continue }
@@ -249,6 +295,29 @@ struct SetupChecklistTests {
                         "저장 권한 판정이 갈렸다 (saveConfig: \(saveConfig))"
                     )
                 }
+            }
+        }
+
+        // 위치 권한도 같은 잣대다 — '아직 묻지 않음' 은 문제로 세지 않지만 갖춰진 것도 아니다.
+        // 두 화면이 그 경계를 다르게 그으면 한쪽은 끝났다 하고 한쪽은 남았다고 한다.
+        for location in [LocationAuthorizationState.granted, .denied, .notDetermined] {
+            for reading in [SSIDReading.connected("OFFICE-WIFI"), .permissionDenied] {
+                let gaps = SetupChecklist.gaps(input(location: location, ssid: reading))
+                let report = PermissionReport.resolve(PermissionInput(
+                    applyInstalled: true,
+                    sudoersInstalled: true,
+                    saveConfigInstalled: true,
+                    isAdministrator: true,
+                    installerAvailable: true,
+                    location: location,
+                    wifiNameVisible: reading.name != nil,
+                    notifications: .allowed
+                ))
+                #expect(
+                    gaps.contains(where: { $0.task == .approve })
+                        == (report.item(.location).state != .satisfied),
+                    "위치 권한 판정이 갈렸다 (\(location), 이름 읽힘: \(reading.name != nil))"
+                )
             }
         }
     }

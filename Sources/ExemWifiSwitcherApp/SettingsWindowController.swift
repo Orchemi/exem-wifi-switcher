@@ -15,6 +15,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// 위치 권한 상태를 가진 쪽(`LocationAuthority`)에 그때그때 물어본다.
     /// 값을 복사해 두면 시스템 설정에 다녀온 뒤에도 옛 답을 보여준다.
     private let locationAuthorization: @MainActor () -> LocationAuthorizationState
+    /// 위치 권한 승인 창을 띄워 달라고 부탁하는 길. `CLLocationManager` 는 앱에 하나뿐이라
+    /// (`LocationAuthority`) 여기서 새로 만들지 않고 그 자리에 부탁한다.
+    private let requestLocationPermission: @MainActor () -> Void
 
     private let introLabel = SettingsWindowController.makeWrappingLabel(
         font: .systemFont(ofSize: NSFont.smallSystemFontSize),
@@ -32,6 +35,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let ssidField = SettingsWindowController.makeField(
         placeholder: "비우면 자동 전환 안 함 · 여럿이면 쉼표로 구분"
     )
+    /// 이 칸을 **채울 수 있게 만드는** 버튼. 위치 권한이 없으면 나타난다.
+    ///
+    /// 예전에는 이 자리에 "권한이 없어 읽지 못했습니다… 직접 입력해도 됩니다" 라는 안내가 붙었다.
+    /// 위치 권한이 필수가 된 지금 그 문장은 틀린 길을 알려주는 것이고, 맞는 길(권한을 받는 것)은
+    /// 아래 권한 섹션까지 내려가야 있었다. **그 길을 이 칸 옆으로 가져온다** — 안내 문장 대신
+    /// 누르면 되는 것을 둔다. 무엇을 해야 하는지는 버튼 이름이 말한다.
+    private let ssidPermissionButton = NSButton(title: "", target: nil, action: nil)
 
     private var errorLabels: [DraftField: NSTextField] = [:]
     private var errorRows: [DraftField: NSGridRow] = [:]
@@ -75,9 +85,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     init(
         locationAuthorization: @escaping @MainActor () -> LocationAuthorizationState,
+        requestLocationPermission: @escaping @MainActor () -> Void,
         onSaved: @escaping () -> Void
     ) {
         self.locationAuthorization = locationAuthorization
+        self.requestLocationPermission = requestLocationPermission
         self.onSaved = onSaved
 
         let window = NSWindow(
@@ -182,21 +194,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         // 같은 말을 두 자리에서 하면 어느 쪽이 최신인지 알 수 없게 된다.
         clearIssues()
         showDNSReadFailureIfNeeded()
-        showSSIDReadFailureIfNeeded()
     }
 
-    /// 지금 Wi-Fi 이름을 **읽지 못해** 칸을 못 채웠으면 그 사실과 풀 방법을 남긴다.
+    /// 창이 열려 있는 동안 새 관측이 왔을 때 화면을 맞춘다.
     ///
-    /// 조용히 빈 칸으로 두면 사용자는 원래 안 쓰는 칸인 줄 안다. 그대로 저장하면 값은 다 맞는데
-    /// 자동 전환만 영영 걸리지 않는다 — 가장 알아채기 어려운 고장이다.
-    private func showSSIDReadFailureIfNeeded() {
-        guard ssidField.stringValue.isEmpty,
-              observation.ssid.isPermissionProblem,
-              let label = errorLabels[.ssids]
-        else { return }
-        label.stringValue = "위치 권한이 없어 지금 Wi-Fi 이름을 읽지 못했습니다. "
-            + "허용하면 이 칸이 자동으로 채워집니다 (아래 권한 섹션). 직접 입력해도 됩니다."
-        errorRows[.ssids]?.isHidden = false
+    /// **위치 권한을 방금 허용한 순간이 이 경로의 이유다.** 그때 Wi-Fi 이름이 처음으로 읽히는데,
+    /// 창을 다시 열기 전에는 칸이 빈 채로 남아 있었다 — 권한을 받아 놓고도 손으로 넣게 되는 셈이다.
+    ///
+    /// **사용자가 적어 둔 것은 건드리지 않는다.** 비어 있는 칸만 채운다.
+    func update(observation: Observation) {
+        self.observation = observation
+        if ssidField.stringValue.isEmpty, let ssid = observation.ssid.name {
+            ssidField.stringValue = ssid
+        }
+        refreshPermissions()
     }
 
     /// 현재 DNS 설정을 **읽지 못했으면** 그 사실을 DNS 칸에 남긴다.
@@ -279,13 +290,42 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 row.button.isHidden = false
                 row.button.title = "명령 복사"
                 row.note.stringValue = Self.keepingWhole(command, in: item.note)
+            case .requestLocationPermission:
+                row.button.isHidden = false
+                row.button.title = "허용 요청"
             }
             row.button.isEnabled = !isRunningInstaller
             row.button.tag = index
         }
+        renderSSIDPermissionButton(report.item(.location))
         uninstallButton.isHidden = !report.canUninstall
         uninstallButton.isEnabled = !isRunningInstaller
         window?.setContentSize(window?.contentView?.fittingSize ?? NSSize(width: Self.windowWidth, height: 320))
+    }
+
+    /// Wi-Fi 이름 칸 옆의 권한 버튼. **판정은 권한 표에서 그대로 가져온다** —
+    /// 여기서 상태를 다시 읽으면 같은 화면 안에서 두 자리가 어긋날 수 있다.
+    ///
+    /// 아직 묻지 않았으면 승인 창을, 거부했으면 시스템 설정을 연다. 허용돼 있으면 버튼이 사라진다 —
+    /// 할 일이 없는 자리에 버튼을 남겨 두면 무언가 덜 된 것처럼 보인다.
+    private func renderSSIDPermissionButton(_ location: PermissionItem) {
+        switch location.remedy {
+        case .requestLocationPermission:
+            ssidPermissionButton.isHidden = false
+            ssidPermissionButton.title = "위치 권한 허용"
+        case .openSettings:
+            ssidPermissionButton.isHidden = false
+            ssidPermissionButton.title = "위치 권한 열기…"
+        case .none, .install, .runCommand:
+            ssidPermissionButton.isHidden = true
+        }
+        ssidPermissionButton.toolTip = ssidPermissionButton.isHidden ? nil : location.note
+    }
+
+    /// 칸 옆 버튼이 하는 일도 권한 표의 조치 그대로다.
+    @objc private func performSSIDPermissionAction() {
+        guard let remedy = permissionReport?.item(.location).remedy else { return }
+        perform(remedy)
     }
 
     /// 명령이 줄 끝에서 잘리지 않게 한다.
@@ -304,7 +344,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// 항목이 내놓은 손잡이를 그대로 실행한다.
     @objc private func performPermissionAction(_ sender: NSButton) {
         guard let report = permissionReport, report.items.indices.contains(sender.tag) else { return }
-        switch report.items[sender.tag].remedy {
+        perform(report.items[sender.tag].remedy, confirmingOn: sender)
+    }
+
+    private func perform(_ remedy: PermissionRemedy, confirmingOn button: NSButton? = nil) {
+        switch remedy {
         case .none:
             break
         case .install:
@@ -312,7 +356,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case .openSettings(let pane):
             open(pane)
         case .runCommand(let command):
-            copyToPasteboard(command, confirmingOn: sender)
+            guard let button else { return }
+            copyToPasteboard(command, confirmingOn: button)
+        case .requestLocationPermission:
+            // 답이 오면 `LocationAuthority` 가 알려주고, 그 길로 이 창이 다시 그려진다
+            // (`update(observation:)` — 그때 Wi-Fi 이름 칸도 채워진다).
+            requestLocationPermission()
         }
     }
 
@@ -626,7 +675,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         addRow(to: grid, title: "네트워크 서비스", control: servicePopUp, field: nil)
         // 아래 값들이 **언제** 적용되는지를 먼저 정한다. 순서에 뜻이 있다 — 조건이 위, 그 조건에서 쓸 값이 아래.
-        addRow(to: grid, title: "사내 Wi-Fi 이름", control: ssidField, field: .ssids)
+        addRow(to: grid, title: "사내 Wi-Fi 이름", control: makeSSIDRow(), field: .ssids)
         addRow(to: grid, title: "IP 주소", control: ipField, field: .ip)
         addRow(to: grid, title: "서브넷 마스크", control: subnetField, field: .subnet)
         addRow(to: grid, title: "라우터", control: routerField, field: .router)
@@ -766,6 +815,32 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         permissionGrid.column(at: 1).xPlacement = .fill
     }
 
+
+    /// Wi-Fi 이름 칸과 그 옆의 권한 버튼 한 줄.
+    ///
+    /// 버튼을 이 칸 옆에 두는 이유: **이 칸을 채우는 것이 그 권한이 하는 일이다.**
+    /// 아래 권한 섹션에도 같은 조치가 있지만, 빈 칸을 보고 있는 사람에게 필요한 것은
+    /// "왜 비었는지" 를 설명하는 문장이 아니라 바로 여기서 누를 수 있는 손잡이다.
+    private func makeSSIDRow() -> NSView {
+        ssidPermissionButton.bezelStyle = .rounded
+        ssidPermissionButton.controlSize = .small
+        ssidPermissionButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        ssidPermissionButton.target = self
+        ssidPermissionButton.action = #selector(performSSIDPermissionAction)
+        // 권한 판정이 오기 전에는 숨어 있는다 — 잠깐 나타났다 사라지면 그것이 더 눈에 띈다.
+        ssidPermissionButton.isHidden = true
+        ssidPermissionButton.setContentHuggingPriority(.required, for: .horizontal)
+        ssidPermissionButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let row = NSStackView(views: [ssidField, ssidPermissionButton])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.distribution = .fill
+        row.spacing = 6
+        // 남는 폭은 입력 칸이 가져간다. 버튼이 없을 때 칸이 줄어들 이유가 없다.
+        ssidField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return row
+    }
 
     /// 라벨 + 입력 칸 한 줄, 그리고 그 아래 숨겨진 오류 줄 하나.
     private func addRow(to grid: NSGridView, title: String, control: NSView, field: DraftField?) {

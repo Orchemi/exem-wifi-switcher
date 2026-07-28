@@ -11,6 +11,9 @@ struct Observation: Sendable {
     var sudoersInstalled: Bool
     /// 설정 저장 스크립트가 놓여 있는가. 초기 설정이 끝났는지를 볼 때 함께 본다.
     var saveConfigInstalled: Bool
+    /// 위치 권한 상태. 메인 스레드의 `LocationAuthority` 가 본 값을 그대로 들고 다닌다 —
+    /// **초기 설정의 필수 항목**이라 메뉴 판정에도 들어간다.
+    var location: LocationAuthorizationState
     /// 지금 접속한 Wi-Fi 이름을 읽은 결과 (자동 전환의 판단 근거).
     var ssid: SSIDReading
     /// 현재 설정된 DNS 서버를 읽은 결과. 온보딩이 초안을 만들 때 쓴다.
@@ -27,6 +30,7 @@ struct Observation: Sendable {
         helperInstalled: false,
         sudoersInstalled: false,
         saveConfigInstalled: false,
+        location: .notDetermined,
         ssid: .unavailable("아직 읽지 않았습니다"),
         dnsServers: .unreadable("아직 읽지 않았습니다"),
         services: []
@@ -45,6 +49,7 @@ struct Observation: Sendable {
             helperInstalled: helperInstalled,
             sudoersInstalled: sudoersInstalled,
             saveConfigInstalled: saveConfigInstalled,
+            location: location,
             action: action,
             autoSwitchEnabled: autoSwitchEnabled,
             ssid: ssid,
@@ -113,6 +118,7 @@ struct SystemProbe: Sendable {
             // (sudoers 파일 내용은 root 만 읽을 수 있지만, 있는지 없는지는 확인할 수 있다)
             sudoersInstalled: FileManager.default.fileExists(atPath: InstallPaths.sudoersFile),
             saveConfigInstalled: FileManager.default.isExecutableFile(atPath: InstallPaths.saveConfigScript),
+            location: locationAuthorization,
             ssid: ssidReader.read(authorization: locationAuthorization),
             dnsServers: reader.readDNSServers(),
             services: services

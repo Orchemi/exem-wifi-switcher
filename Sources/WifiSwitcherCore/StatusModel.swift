@@ -36,6 +36,9 @@ public struct StatusInput: Equatable, Sendable {
     public var sudoersInstalled: Bool
     /// 설정 저장 스크립트(`save-config`)가 놓여 있는가. 없으면 값을 저장할 수 없어 설정을 끝낼 수 없다.
     public var saveConfigInstalled: Bool
+    /// 위치 권한 상태. **초기 설정의 필수 항목이다** — 이것이 없으면 Wi-Fi 이름을 못 읽어
+    /// 사용자가 사내 Wi-Fi 이름을 손으로 넣어야 한다 (`SetupChecklist` 주석).
+    public var location: LocationAuthorizationState
     public var action: ActionState
     /// 자동 전환이 켜져 있는가.
     public var autoSwitchEnabled: Bool
@@ -53,6 +56,7 @@ public struct StatusInput: Equatable, Sendable {
         helperInstalled: Bool = true,
         sudoersInstalled: Bool = true,
         saveConfigInstalled: Bool = true,
+        location: LocationAuthorizationState = .granted,
         action: ActionState = .idle,
         autoSwitchEnabled: Bool = false,
         ssid: SSIDReading? = nil,
@@ -65,6 +69,7 @@ public struct StatusInput: Equatable, Sendable {
         self.helperInstalled = helperInstalled
         self.sudoersInstalled = sudoersInstalled
         self.saveConfigInstalled = saveConfigInstalled
+        self.location = location
         self.action = action
         self.autoSwitchEnabled = autoSwitchEnabled
         self.ssid = ssid

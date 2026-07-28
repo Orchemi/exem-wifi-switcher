@@ -9,6 +9,10 @@ public enum SetupGap: Equatable, Sendable {
     case switchingPermission
     /// 설정 저장 권한이 없다 — `save-config` 가 빠져 값을 저장할 수 없다
     case savingPermission
+    /// 위치 권한을 아직 묻지 않았다 — 승인 창 한 번으로 풀린다
+    case locationPermissionNotAsked
+    /// 위치 권한이 거부됐다 — Wi-Fi 이름을 읽을 수 없어 자동 전환이 성립하지 않는다
+    case locationPermissionDenied
     /// 설정 파일이 아직 없다 — 사내 프로필이 하나도 등록되지 않았다
     case profiles
     /// 파일은 있지만 설치 스크립트가 복사한 예시 그대로다 — 아직 사용자의 값이 아니다
@@ -16,12 +20,21 @@ public enum SetupGap: Equatable, Sendable {
     /// 값은 다 있는데 사내 Wi-Fi 이름이 하나도 없다 — 자동 전환이 걸릴 자리가 없다
     case wifiNames
 
-    /// 권한 쪽인가. 권한은 설치 한 번이 함께 놓고, 값은 설정 창에서 채운다 —
-    /// 사용자가 하는 일이 갈리는 자리다.
-    var isPermission: Bool {
+    /// 사용자가 **한 번에 처리하는 단위.** 보조 줄을 적을지 말지가 이 단위로 갈린다.
+    enum Task: Equatable {
+        /// 설치 한 번(`install.sh`)이 함께 놓는 것들
+        case install
+        /// 승인 한 번으로 풀리는 것 (승인 창 또는 시스템 설정)
+        case approve
+        /// 설정 창에서 값을 채우는 일
+        case fillIn
+    }
+
+    var task: Task {
         switch self {
-        case .switchingPermission, .savingPermission: return true
-        case .profiles, .exampleProfiles, .wifiNames: return false
+        case .switchingPermission, .savingPermission: return .install
+        case .locationPermissionNotAsked, .locationPermissionDenied: return .approve
+        case .profiles, .exampleProfiles, .wifiNames: return .fillIn
         }
     }
 
@@ -30,6 +43,10 @@ public enum SetupGap: Equatable, Sendable {
         switch self {
         case .switchingPermission: return "전환 권한 미설치"
         case .savingPermission: return "설정 저장 권한 미설치"
+        // 메뉴가 자동 전환 아래에 쓰는 말과 같은 낱말을 쓴다 (`SSIDReading.statusText`) —
+        // 같은 상태를 두 자리에서 다른 이름으로 부르면 다른 문제로 읽힌다.
+        case .locationPermissionNotAsked: return "위치 권한 미승인"
+        case .locationPermissionDenied: return "위치 권한 없음"
         case .profiles:
             // 설정 파일이 아예 없는 것은 **머리말이 이미 말한 그 상태**다. 아무것도 시작되지
             // 않았다는 사실을 크기만 줄여 한 번 더 적으면 줄만 늘고 읽을 것은 늘지 않는다.
@@ -49,11 +66,19 @@ public enum SetupGap: Equatable, Sendable {
 /// 판정 기준은 설정 창의 권한 표(`PermissionReport`)와 같아야 한다. 두 화면이 같은 시스템을
 /// 두고 다른 답을 내면 어느 쪽을 믿어야 할지 알 수 없다 (`SetupChecklistTests` 가 조합마다 대조한다).
 ///
+/// **위치 권한은 필수다** (2026-07-28 오너 판단 — 자세한 경위는 `docs/plan/001` "뒤집힌 결정").
+/// 없어도 수동 전환은 되니 선택으로 뒀었는데, 그러면 사용자가 사내 Wi-Fi 이름을 **손으로**
+/// 넣어야 한다. 이 도구의 목적이 "사람이 아무것도 누르지 않는 것" 인데 시작부터 그 반대를 시킨다.
+///
 /// **여기 넣지 않은 것 둘.**
-///   - **위치·알림 권한**: 없어도 수동 전환은 된다. 알림을 뜻해서 끈 사용자에게 '초기 설정하기'
+///   - **알림 권한**: 없어도 전환은 그대로 된다. 알림을 뜻해서 끈 사용자에게 '초기 설정하기'
 ///     가 영영 떠 있으면 그것은 잘못된 신호다 — 그쪽은 보조 줄과 조치 항목이 안내한다
 ///   - **관리자 계정 여부**: 설치로 해결되지 않는다. 손쓸 수 없는 것을 할 일로 적어 두면
 ///     그 계정에서는 머리말이 영영 내려가지 않는다
+///
+/// **필수라는 것이 기능을 잠근다는 뜻은 아니다.** 위치 권한이 없어도 메뉴에서 프로필을 골라
+/// 전환하는 것은 그대로 된다 (`StatusModel` 의 `canSwitch`). 체크리스트에 남아 계속 안내할 뿐이다 —
+/// 자동 전환을 포기하고 손으로 쓰겠다는 사용자의 길까지 막을 이유는 없다.
 public enum SetupChecklist {
 
     /// 아직 남아 있는 것. 비어 있으면 초기 설정이 끝났다.
@@ -70,6 +95,18 @@ public enum SetupChecklist {
         }
         if !input.saveConfigInstalled {
             gaps.append(.savingPermission)
+        }
+
+        // Wi-Fi 이름이 읽히고 있다면 권한은 있는 것이다 — **관측된 사실이 아직 정해지지 않은
+        // 상태 값을 이긴다** (`PermissionReport.location` 과 같은 규칙. `CLLocationManager` 는
+        // 만든 직후 '아직 묻지 않음' 을 돌려준다).
+        switch input.location {
+        case .granted:
+            break
+        case .notDetermined:
+            if input.ssid?.name == nil { gaps.append(.locationPermissionNotAsked) }
+        case .denied:
+            gaps.append(.locationPermissionDenied)
         }
 
         switch input.config {
@@ -94,18 +131,21 @@ public enum SetupChecklist {
     /// **남은 일이 한 가지일 때만 그 일을 적는다.** 여럿이면 그 줄은 목록이 되는데,
     /// 메뉴는 문서가 아니다 — 무엇무엇이 남았는지는 눌러서 여는 설정 창이 전부 들고 있다.
     ///
-    /// 권한 둘은 설치 한 번(`install.sh`)이 함께 놓는다. 앱에게는 두 항목이지만
-    /// 사용자에게는 한 가지 일이라, 둘 다 빠졌으면 '권한 미설치' 한 줄로 적는다.
+    /// **일의 갈래는 셋이다** — 설치 한 번(`install.sh`)으로 놓는 것 · 승인 한 번으로 푸는 것 ·
+    /// 설정 창에서 채우는 것. 갈래 하나만 남았을 때 적고, 둘 이상 남았으면 적지 않는다.
+    /// 설치 쪽은 한 번에 둘이 함께 놓이므로 둘 다 빠졌으면 '권한 미설치' 한 줄로 묶는다.
     public static func shortfall(_ gaps: [SetupGap]) -> String? {
-        let permissions = gaps.filter(\.isPermission)
-        let values = gaps.filter { !$0.isPermission }
+        let tasks = Set(gaps.map(\.task))
+        guard tasks.count == 1, let task = tasks.first else { return nil }
 
-        if !permissions.isEmpty && !values.isEmpty { return nil }
-        if values.isEmpty {
-            guard let only = permissions.first else { return nil }
-            return permissions.count == 1 ? only.shortfall : "권한 미설치"
+        switch task {
+        case .install:
+            guard let only = gaps.first else { return nil }
+            return gaps.count == 1 ? only.shortfall : "권한 미설치"
+        case .approve, .fillIn:
+            // 이 두 갈래 안의 갈림은 서로 배타적이라 남는 것이 언제나 하나다
+            // (묻지 않음 ↔ 거부됨 · 파일 없음 ↔ 예시 그대로 ↔ Wi-Fi 이름 없음).
+            return gaps.first?.shortfall
         }
-        // 값 쪽 셋은 서로 배타적이다 (파일 없음 · 예시 그대로 · 값은 있는데 Wi-Fi 이름 없음).
-        return values.first?.shortfall
     }
 }

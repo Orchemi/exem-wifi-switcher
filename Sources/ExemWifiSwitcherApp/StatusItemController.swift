@@ -99,7 +99,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         Task {
             await refreshAndEvaluate()
             // 첫 실행(설정이 없거나 예시 그대로)이면 바로 설정 창을 연다.
-            if model.needsSetup { openSettings() }
+            //
+            // **묻는 것이 먼저다.** 위치 권한이 있어야 지금 붙어 있는 Wi-Fi 이름이 읽히고,
+            // 그래야 온보딩의 '사내 Wi-Fi 이름' 칸이 채워진 채로 열린다. 순서를 뒤집으면
+            // 사용자는 빈 칸부터 마주하고, 그 칸을 손으로 채우게 된다 — 이 도구가 없애려던 수고다.
+            if model.needsSetup {
+                locationAuthority.requestIfNeeded()
+                openSettings()
+            }
         }
 
         // 앱을 옮겼다면 로그인 항목이 가리키는 경로를 맞춰 둔다 (등록돼 있을 때만 동작한다).
@@ -164,6 +171,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let authorization = locationAuthority.state
         observation = await Task.detached(priority: .utility) { probe.read(locationAuthorization: authorization) }.value
         render()
+        // 열려 있는 설정 창도 같은 관측을 보게 한다. 위치 권한을 방금 허용한 순간이 여기다 —
+        // 그때 처음 읽히는 Wi-Fi 이름이 창의 빈 칸으로 들어간다.
+        if window(isVisible: settingsWindow) { settingsWindow?.update(observation: observation) }
+    }
+
+    private func window(isVisible controller: SettingsWindowController?) -> Bool {
+        controller?.window?.isVisible == true
     }
 
     /// 읽고 나서 자동 전환을 판정한다. 네트워크 변경·주기 확인·메뉴 열기·권한 변경이 모두 이 문으로 들어온다.
@@ -540,6 +554,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // 위치 권한은 값을 넘기지 않고 **물어보는 길**을 넘긴다 — 창이 열려 있는 동안에도 바뀌기 때문이다.
         let controller = settingsWindow ?? SettingsWindowController(
             locationAuthorization: { [weak self] in self?.locationAuthority.state ?? .notDetermined },
+            requestLocationPermission: { [weak self] in self?.locationAuthority.requestIfNeeded() },
             onSaved: { [weak self] in
                 Task { @MainActor in await self?.refreshAndEvaluate() }
             }
