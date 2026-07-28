@@ -7,6 +7,10 @@ struct Observation: Sendable {
     var interface: InterfaceInfo?
     var interfaceError: String?
     var helperInstalled: Bool
+    /// 무암호 sudoers 규칙이 놓여 있는가. 스크립트만 있고 규칙이 없으면 전환할 때마다 암호를 물어 실패한다.
+    var sudoersInstalled: Bool
+    /// 설정 저장 스크립트가 놓여 있는가. 초기 설정이 끝났는지를 볼 때 함께 본다.
+    var saveConfigInstalled: Bool
     /// 지금 접속한 Wi-Fi 이름을 읽은 결과 (자동 전환의 판단 근거).
     var ssid: SSIDReading
     /// 현재 설정된 DNS 서버를 읽은 결과. 온보딩이 초안을 만들 때 쓴다.
@@ -21,6 +25,8 @@ struct Observation: Sendable {
         interface: nil,
         interfaceError: nil,
         helperInstalled: false,
+        sudoersInstalled: false,
+        saveConfigInstalled: false,
         ssid: .unavailable("아직 읽지 않았습니다"),
         dnsServers: .unreadable("아직 읽지 않았습니다"),
         services: []
@@ -37,6 +43,8 @@ struct Observation: Sendable {
             interface: interface,
             interfaceError: interfaceError,
             helperInstalled: helperInstalled,
+            sudoersInstalled: sudoersInstalled,
+            saveConfigInstalled: saveConfigInstalled,
             action: action,
             autoSwitchEnabled: autoSwitchEnabled,
             ssid: ssid,
@@ -101,6 +109,10 @@ struct SystemProbe: Sendable {
             interface: interface,
             interfaceError: interfaceError,
             helperInstalled: FileManager.default.isExecutableFile(atPath: InstallPaths.applyScript),
+            // 파일이 놓여 있는지만 본다 — 상태를 보려고 sudo 를 시험 삼아 돌리지 않는다.
+            // (sudoers 파일 내용은 root 만 읽을 수 있지만, 있는지 없는지는 확인할 수 있다)
+            sudoersInstalled: FileManager.default.fileExists(atPath: InstallPaths.sudoersFile),
+            saveConfigInstalled: FileManager.default.isExecutableFile(atPath: InstallPaths.saveConfigScript),
             ssid: ssidReader.read(authorization: locationAuthorization),
             dnsServers: reader.readDNSServers(),
             services: services

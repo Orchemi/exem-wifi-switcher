@@ -77,6 +77,26 @@ struct StatusModelMenuTextTests {
             action: .switching(profile: "office"), autoSwitchEnabled: true,
             ssid: .connected("OFFICE-WIFI")
         ))
+        // 초기 설정이 덜 끝난 갈래들 — 무암호 규칙만 없는 경우 · 저장 권한만 없는 경우 ·
+        // 값은 다 있는데 사내 Wi-Fi 이름만 없는 경우.
+        let withoutWiFiNames = AppConfig(
+            profiles: [NetworkProfile(
+                name: "office", mode: .manual, ip: "192.0.2.10", subnet: "255.255.255.0",
+                router: "192.0.2.1", label: "사내 고정 IP"
+            ), auto],
+            defaultProfile: "auto"
+        )
+        for gap in [
+            StatusInput(config: .ready(config), interface: officeInfo, sudoersInstalled: false),
+            StatusInput(config: .ready(config), interface: officeInfo, saveConfigInstalled: false),
+            StatusInput(
+                config: .ready(config), interface: officeInfo,
+                helperInstalled: false, saveConfigInstalled: false
+            ),
+            StatusInput(config: .ready(withoutWiFiNames), interface: officeInfo),
+        ] {
+            inputs.append(gap)
+        }
         return inputs
     }
 
@@ -200,7 +220,7 @@ struct StatusModelMenuTextTests {
             autoSwitchEnabled: true, ssid: .connected("OFFICE-WIFI"),
             autoSwitchHold: .helperNotInstalled
         ))
-        #expect(noHelper.detail == "설정 창에서 설치")
+        #expect(noHelper.detail == "전환 권한 미설치")
         #expect(noHelper.autoSwitchNotes.isEmpty)
     }
 

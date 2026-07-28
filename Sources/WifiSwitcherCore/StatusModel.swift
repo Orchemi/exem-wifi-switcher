@@ -29,6 +29,13 @@ public struct StatusInput: Equatable, Sendable {
     public var interfaceError: String?
     /// 권한 스크립트(`apply`)가 설치돼 있는가.
     public var helperInstalled: Bool
+    /// 무암호 sudoers 규칙이 놓여 있는가.
+    ///
+    /// 스크립트만 있고 규칙이 없으면 겉보기에는 설치된 상태인데 전환할 때마다 암호를 물어 실패한다.
+    /// 설정 창의 '전환 권한' 도 같은 기준으로 본다 (`PermissionReport.switching`).
+    public var sudoersInstalled: Bool
+    /// 설정 저장 스크립트(`save-config`)가 놓여 있는가. 없으면 값을 저장할 수 없어 설정을 끝낼 수 없다.
+    public var saveConfigInstalled: Bool
     public var action: ActionState
     /// 자동 전환이 켜져 있는가.
     public var autoSwitchEnabled: Bool
@@ -44,6 +51,8 @@ public struct StatusInput: Equatable, Sendable {
         interface: InterfaceInfo? = nil,
         interfaceError: String? = nil,
         helperInstalled: Bool = true,
+        sudoersInstalled: Bool = true,
+        saveConfigInstalled: Bool = true,
         action: ActionState = .idle,
         autoSwitchEnabled: Bool = false,
         ssid: SSIDReading? = nil,
@@ -54,6 +63,8 @@ public struct StatusInput: Equatable, Sendable {
         self.interface = interface
         self.interfaceError = interfaceError
         self.helperInstalled = helperInstalled
+        self.sudoersInstalled = sudoersInstalled
+        self.saveConfigInstalled = saveConfigInstalled
         self.action = action
         self.autoSwitchEnabled = autoSwitchEnabled
         self.ssid = ssid
@@ -108,7 +119,11 @@ public struct StatusModel: Equatable, Sendable {
     public let activeProfileName: String?
     /// 프로필을 눌러 전환할 수 있는 상태인가
     public let canSwitch: Bool
-    /// 온보딩을 띄워야 하는 상태인가
+    /// 앱을 띄우자마자 **설정 창을 열어야** 하는 상태인가.
+    ///
+    /// 머리말이 '초기 설정하기' 인 것보다 **좁다.** 저 문구는 남은 일이 하나라도 있으면 나오지만,
+    /// 창을 자동으로 여는 것은 아직 사용자의 값이 하나도 없을 때(파일 없음 · 예시 그대로)뿐이다.
+    /// 권한 하나가 빠졌다는 이유로 로그인할 때마다 창이 튀어나오면 그것은 안내가 아니라 소음이다.
     public let needsSetup: Bool
 
     // 아래 세 값은 자동 전환(Phase 3)의 표시다. 위의 값들이 "지금 어떤 구성인가" 를 말한다면
@@ -133,8 +148,16 @@ public struct StatusModel: Equatable, Sendable {
     /// 알림이 막히면 자동 전환은 완전히 무성이 된다. 그래서 상태(`- 알림 꺼짐`)와 조치를 함께 낸다.
     public private(set) var needsNotificationPermission: Bool = false
 
+    /// 초기 설정에서 아직 남아 있는 것. 비어 있으면 사용자가 할 일이 없다.
+    ///
+    /// 비어 있지 않다고 늘 머리말이 '초기 설정하기' 인 것은 아니다 — 전환 중이거나 방금 실패했거나
+    /// 설정 파일이 깨진 **문제 상황**은 그쪽이 먼저 말한다.
+    public private(set) var setupGaps: [SetupGap] = []
+
     public static func resolve(_ input: StatusInput) -> StatusModel {
-        var model = resolveNetworkState(input)
+        let setupGaps = SetupChecklist.gaps(input)
+        var model = resolveNetworkState(input, setupGaps: setupGaps)
+        model.setupGaps = setupGaps
         model.autoSwitchEnabled = input.autoSwitchEnabled
         model.needsLocationPermission = input.autoSwitchEnabled && (input.ssid?.isPermissionProblem ?? false)
         model.canRetryAutoSwitch = input.autoSwitchEnabled && isStalled(input.autoSwitchHold)
@@ -154,7 +177,7 @@ public struct StatusModel: Equatable, Sendable {
         }
     }
 
-    private static func resolveNetworkState(_ input: StatusInput) -> StatusModel {
+    private static func resolveNetworkState(_ input: StatusInput, setupGaps: [SetupGap]) -> StatusModel {
         let profiles: [NetworkProfile]
         if case .ready(let config) = input.config { profiles = config.profiles } else { profiles = [] }
 
@@ -187,56 +210,42 @@ public struct StatusModel: Equatable, Sendable {
             break
         }
 
-        // 2) 설정이 없거나 못 쓰면 전환할 대상 자체가 없다.
-        //
-        // 이 상태의 머리말은 **상태가 아니라 할 일**을 적는다. 메뉴의 첫 줄은 눌러서 설정 창을
-        // 여는 자리인데(`MenuStyle.headline`), '설정 필요' 라고만 적어 두면 그 줄이 문이라는 것이
-        // 읽히지 않는다. 사용자가 지금 해야 하는 일이 하나뿐인 상태이므로 그 일을 그대로 적는다.
-        //
-        // 절차는 여기 적지 않는다 — 어떻게 등록하는지는 그 문을 열면 나오는 설정 창이 말한다.
-        switch input.config {
-        case .missing:
-            // 딸린 줄이 없다. 설정 파일이 아예 없는 것은 **머리말이 이미 말한 그 상태**이고,
-            // 그 위에 '사내 IP 미등록' 을 덧붙여도 같은 말을 두 번 하는 것뿐이다.
-            // 보조 줄은 머리말이 말하지 않은 것이 있을 때만 붙인다.
-            return StatusModel(
-                icon: .error, headline: "초기 설정하기",
-                detail: nil,
-                profiles: [], activeProfileName: nil, canSwitch: false, needsSetup: true
-            )
-        case .pristineExample:
-            // 값이 없는 것과 예시가 그대로 남은 것은 사용자가 할 일이 같아도 **원인이 다르다.**
-            // 이쪽은 파일이 있는데도 설정이 안 된 상태라, 머리말만 보면 왜인지 알 수 없다 —
-            // 머리말이 말하지 않는 그 원인 하나만 딸린 줄로 남긴다.
-            return StatusModel(
-                icon: .error, headline: "초기 설정하기",
-                detail: "예시 설정 그대로",
-                profiles: [], activeProfileName: nil, canSwitch: false, needsSetup: true
-            )
-        case .unusable(_, let reason):
-            // 오류는 이유가 보여야 한다. 다만 전문은 설정 창이 들고, 여기는 한 줄까지만.
+        // 2) 설정 파일이 깨진 것은 **초기 설정이 남은 것이 아니라 고장이다.**
+        //    할 일을 적을 자리가 아니므로 먼저 답하고, 이유를 그대로 보여준다
+        //    (전문은 설정 창이 들고, 여기는 한 줄까지만).
+        if case .unusable(_, let reason) = input.config {
             return StatusModel(
                 icon: .error, headline: "설정 파일 오류",
                 detail: clip(reason),
                 profiles: [], activeProfileName: nil, canSwitch: false, needsSetup: false
             )
-        case .ready:
-            break
         }
 
-        // 3) 권한 스크립트가 없으면 눌러도 실패한다. 누르기 전에 알린다.
-        //    **어디로 가면 되는지**까지는 적는다 — 이 줄이 없으면 사용자가 막힌다.
-        //    다만 절차가 아니라 자리만 가리킨다 (터미널 명령을 적어 두면 앱이 대신 설치하게 된
-        //    지금도 낡은 안내로 남는다).
-        guard input.helperInstalled else {
+        // 3) 초기 설정이 아직 안 끝났다.
+        //
+        // 권한이 없어서 안 되는 것과 값이 없어서 안 되는 것은 앱에게는 다른 일이지만,
+        // 사용자에게는 똑같이 "아직 내가 할 일이 남았다" 이다. **그래서 머리말 하나로 묶는다** —
+        // 여기 무엇이 들어가는지는 `SetupChecklist` 한 자리가 정한다.
+        //
+        // 이 상태의 머리말은 **상태가 아니라 할 일**을 적는다. 메뉴의 첫 줄은 눌러서 설정 창을
+        // 여는 자리인데(`MenuStyle.headline`), 상태만 적어 두면 그 줄이 문이라는 것이 읽히지 않는다.
+        // 절차는 여기 적지 않는다 — 어떻게 하는지는 그 문을 열면 나오는 설정 창이 말한다.
+        if !setupGaps.isEmpty {
+            // 아이콘도 머리말과 같은 편에 선다. 메뉴를 열지 않아도 보이는 것이 아이콘이라,
+            // 머리말이 '할 일이 남았다' 인 동안 아이콘만 정상으로 두면 두 표시가 어긋난다.
+            //
+            // 전환은 **눌러서 될 때만** 열어 둔다. 권한이 빠진 채로 열어 두면 누를 때마다 실패한다.
+            // 반대로 Wi-Fi 이름만 없는 상태는 수동 전환에 아무 문제가 없다 — 그대로 열어 둔다.
+            let canSwitch = !profiles.isEmpty && input.helperInstalled && input.sudoersInstalled
             return StatusModel(
                 icon: .error,
-                headline: "전환 권한 미설치",
-                detail: "설정 창에서 설치",
+                headline: "초기 설정하기",
+                detail: SetupChecklist.shortfall(setupGaps),
                 profiles: profiles,
                 activeProfileName: active?.name,
-                canSwitch: false,
-                needsSetup: false
+                canSwitch: canSwitch,
+                // 창을 자동으로 여는 것은 값이 아직 사용자의 것이 아닐 때뿐이다 (`needsSetup` 주석).
+                needsSetup: setupGaps.contains(.profiles) || setupGaps.contains(.exampleProfiles)
             )
         }
 

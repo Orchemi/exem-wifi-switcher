@@ -9,9 +9,12 @@ import Testing
 @Suite("메뉴바 상태 판정")
 struct StatusModelTests {
 
+    /// **초기 설정을 끝낸** 프로필이다 — 사내 Wi-Fi 이름까지 들어 있다.
+    /// 이 이름이 비면 '아직 설정이 안 끝난 상태' 가 되어 머리말이 상태가 아니라 할 일을 말한다
+    /// (`SetupChecklistTests` 가 그 갈래를 따로 본다).
     private static let office = NetworkProfile(
         name: "office", mode: .manual, ip: "192.0.2.10", subnet: "255.255.255.0",
-        router: "192.0.2.1", label: "사내 고정 IP"
+        router: "192.0.2.1", ssids: ["OFFICE-WIFI"], label: "사내 고정 IP"
     )
     private static let auto = NetworkProfile(name: "auto", mode: .dhcp, label: "자동 (DHCP)")
     private static let config = AppConfig(profiles: [office, auto], defaultProfile: "auto")
@@ -110,16 +113,15 @@ struct StatusModelTests {
         #expect(!model.canSwitch)
     }
 
-    @Test("권한 스크립트가 없으면 그 사실을 머리말에 남긴다")
+    @Test("권한 스크립트가 없으면 아직 설정이 안 끝난 것으로 본다")
     func reportsMissingHelper() {
         let model = StatusModel.resolve(input(interface: Self.manualInfo, helperInstalled: false))
         #expect(model.icon == .error)
         #expect(!model.canSwitch)
-        #expect(model.headline == "전환 권한 미설치")
-        // 어디로 가면 되는지까지는 적는다 — 이 줄이 없으면 사용자가 막힌다.
-        // 다만 절차가 아니라 자리만 가리킨다 (터미널 명령을 적어 두면 앱이 대신 설치하게 된
-        // 지금도 낡은 안내로 남는다).
-        #expect(model.detail == "설정 창에서 설치")
+        // 값이 다 있어도 권한이 없으면 사용자에게는 "아직 설정이 안 끝난 것" 이다.
+        #expect(model.headline == "초기 설정하기")
+        // 머리말은 무엇이 남았는지까지는 말하지 않는다. 그 하나를 딸린 줄이 적는다.
+        #expect(model.detail == "전환 권한 미설치")
         // 프로필 목록 자체는 그대로 보여준다 (무엇이 있는지는 알 수 있어야 한다).
         #expect(model.profiles.count == 2)
     }
