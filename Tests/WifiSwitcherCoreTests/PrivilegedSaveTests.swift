@@ -321,4 +321,21 @@ struct PathDisplayTests {
         #expect(PathDisplay.abbreviate(path, home: "") == path)
         #expect(PathDisplay.abbreviate(path, home: "/") == path)
     }
+
+    /// 설치 계획(`--dry-run` 출력)처럼 여러 경로가 문장에 섞여 나오는 글에 쓴다.
+    /// 그 글은 문제를 보고할 때 그대로 복사되기도 하므로 계정 이름을 남기지 않는다.
+    @Test("글 안에 섞인 홈 디렉터리를 전부 줄인다")
+    func abbreviatesInsideText() {
+        let text = "설치 원본  \(Self.home)/tools/app\n로그인 항목 \(Self.home)/Library/LaunchAgents/x.plist"
+        let shortened = PathDisplay.abbreviate(in: text, home: Self.home)
+        #expect(!shortened.contains(Self.home))
+        #expect(shortened.contains("~/tools/app"))
+        #expect(shortened.contains("~/Library/LaunchAgents/x.plist"))
+    }
+
+    @Test("홈을 알 수 없으면 글을 건드리지 않는다")
+    func leavesTextAloneWithoutHome() {
+        #expect(PathDisplay.abbreviate(in: "a/b", home: "") == "a/b")
+        #expect(PathDisplay.abbreviate(in: "/usr/local", home: "/") == "/usr/local")
+    }
 }

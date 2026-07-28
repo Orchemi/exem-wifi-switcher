@@ -44,6 +44,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var permissionReport: PermissionReport?
     /// 마지막으로 시작한 권한 읽기. 겹쳐 들어온 읽기 중 이 번호의 결과만 화면에 옮긴다.
     private var permissionReadToken = 0
+    /// 설치된 것을 되돌리는 손잡이. 항목별 조치가 아니라 섹션 전체에 걸리므로 머리말 옆에 둔다.
+    private let uninstallButton = NSButton(title: "제거…", target: nil, action: nil)
+    /// 설치·제거가 도는 동안 같은 일을 두 번 걸지 않는다.
+    private var isRunningInstaller = false
 
     private var observation = Observation.pending
     private var hasBeenShown = false
@@ -221,6 +225,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             switch item.remedy {
             case .none:
                 row.button.isHidden = true
+            case .install:
+                row.button.isHidden = false
+                row.button.title = "설치"
             case .openSettings:
                 row.button.isHidden = false
                 row.button.title = "설정 열기"
@@ -229,8 +236,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 row.button.title = "명령 복사"
                 row.note.stringValue = Self.keepingWhole(command, in: item.note)
             }
+            row.button.isEnabled = !isRunningInstaller
             row.button.tag = index
         }
+        uninstallButton.isHidden = !report.canUninstall
+        uninstallButton.isEnabled = !isRunningInstaller
         window?.setContentSize(window?.contentView?.fittingSize ?? NSSize(width: Self.windowWidth, height: 320))
     }
 
@@ -247,31 +257,198 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         return text.replacingOccurrences(of: command, with: unbreakable)
     }
 
-    /// 항목이 내놓은 손잡이를 그대로 실행한다. **앱은 sudo 를 대신 실행하지 않는다** —
-    /// 설치가 필요한 항목에서 하는 일은 명령을 복사해 주는 것까지다.
+    /// 항목이 내놓은 손잡이를 그대로 실행한다.
     @objc private func performPermissionAction(_ sender: NSButton) {
         guard let report = permissionReport, report.items.indices.contains(sender.tag) else { return }
         switch report.items[sender.tag].remedy {
         case .none:
             break
+        case .install:
+            beginInstaller(.install)
         case .openSettings(let pane):
             guard let url = URL(string: pane.url) else { return }
             NSWorkspace.shared.open(url)
         case .runCommand(let command):
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(command, forType: .string)
-            confirmCopy(on: sender)
+            copyToPasteboard(command, confirmingOn: sender)
         }
     }
 
+    @objc private func performUninstall() {
+        beginInstaller(.uninstall)
+    }
+
     /// 복사는 눈에 보이는 변화가 없다. 눌렀는데 아무 일도 없으면 안 된 줄 안다.
-    private func confirmCopy(on button: NSButton) {
+    private func copyToPasteboard(_ text: String, confirmingOn button: NSButton) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        let previousTitle = button.title
         button.title = "복사됨"
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_600_000_000)
             guard button.title == "복사됨" else { return }
-            button.title = "명령 복사"
+            button.title = previousTitle
         }
+    }
+
+    // MARK: - 앱 안에서 설치·제거
+
+    /// 무엇을 할지 먼저 보여주고 확인을 받은 다음에야 관리자 인증으로 넘어간다.
+    ///
+    /// 계획은 앱이 지어내지 않는다 — 실행할 바로 그 스크립트의 `--dry-run` 출력이다.
+    private func beginInstaller(_ operation: BundledInstaller.Operation) {
+        guard !isRunningInstaller else { return }
+        isRunningInstaller = true
+        setInstallerControlsEnabled(false)
+
+        Task { @MainActor in
+            let outcome = await InstallerService.preview(operation)
+            switch outcome {
+            case .failure(let failure):
+                isRunningInstaller = false
+                setInstallerControlsEnabled(true)
+                present(failure, operation: operation)
+            case .success(let preview):
+                confirm(preview, operation: operation)
+            }
+        }
+    }
+
+    private func confirm(_ preview: InstallerService.Preview, operation: BundledInstaller.Operation) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = operation == .install
+            ? "전환 권한을 설치합니다"
+            : "설치한 항목을 제거합니다"
+        alert.informativeText = operation == .install
+            ? "관리자 인증을 한 번 받습니다. 아래가 설치할 내용 전부입니다."
+            : "관리자 인증을 한 번 받습니다. 아래 항목을 지웁니다 — 입력한 네트워크 값도 함께 지워집니다."
+        alert.accessoryView = Self.makePlanView(preview.plan)
+
+        let confirmButton = alert.addButton(withTitle: operation.title)
+        if operation == .uninstall { confirmButton.hasDestructiveAction = true }
+        alert.addButton(withTitle: "취소")
+        // 앱에서 하는 설치가 막혔을 때의 출구. 기본 동선은 위 버튼이다.
+        alert.addButton(withTitle: "터미널 명령 복사")
+
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            switch response {
+            case .alertFirstButtonReturn:
+                self.runInstaller(operation)
+            case .alertThirdButtonReturn:
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(preview.terminalCommand, forType: .string)
+                self.finishInstaller()
+            default:
+                self.finishInstaller()
+            }
+        }
+    }
+
+    private func runInstaller(_ operation: BundledInstaller.Operation) {
+        // 인증 창이 뜨는 동안 메인 스레드가 멈춘다 (설정 저장과 같은 경로다).
+        let result = InstallerService.run(operation)
+        finishInstaller()
+        refreshPermissions()
+
+        switch result {
+        case .success:
+            presentInstallerSuccess(operation)
+        case .cancelled:
+            // 취소는 실패가 아니다. 아무것도 바뀌지 않았다는 사실만 알린다.
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = "인증을 취소해서 \(operation.title)하지 않았습니다"
+            alert.informativeText = "시스템은 그대로입니다."
+            alert.addButton(withTitle: "확인")
+            show(alert)
+        case .failed(let message):
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "\(operation.title)하지 못했습니다"
+            alert.informativeText = message
+            alert.addButton(withTitle: "확인")
+            alert.addButton(withTitle: "터미널 명령 복사")
+            let command = BundledInstaller.terminalCommand(
+                scriptPath: InstallerService.scriptPath(for: operation)
+            )
+            show(alert) { response in
+                guard response == .alertSecondButtonReturn else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(command, forType: .string)
+            }
+        }
+    }
+
+    private func presentInstallerSuccess(_ operation: BundledInstaller.Operation) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        switch operation {
+        case .install:
+            alert.messageText = "설치했습니다"
+            alert.informativeText = "이제 프로필을 전환할 때 암호를 묻지 않습니다. "
+                + "설정 값을 저장할 때는 관리자 인증을 한 번 받습니다."
+        case .uninstall:
+            alert.messageText = "제거했습니다"
+            alert.informativeText = "전환·저장 권한과 설정을 지웠습니다. 앱은 계속 실행 중입니다 — "
+                + "앱 자체를 지우려면 \(InstallPaths.appName).app 을 직접 지우세요."
+        }
+        alert.addButton(withTitle: "확인")
+        show(alert)
+    }
+
+    /// 계획을 못 받아 온 이유를 그대로 옮긴다. 사유마다 할 수 있는 일이 다르다.
+    private func present(_ failure: InstallerService.PreviewFailure, operation: BundledInstaller.Operation) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        switch failure {
+        case .unavailable(let reason):
+            alert.messageText = "앱에서 \(operation.title)할 수 없습니다"
+            alert.informativeText = "\(reason)\n터미널에서 \(BundledInstaller.repositoryCommand(for: operation)) 를 실행하세요."
+        case .altered(let reason):
+            alert.messageText = "앱이 서명된 뒤 바뀌었습니다"
+            alert.informativeText = "이 상태에서는 관리자 권한으로 실행하지 않습니다. "
+                + "앱을 다시 내려받거나 다시 빌드하세요.\n\n\(reason)"
+        case .refused(let reason):
+            alert.messageText = "\(operation.title)할 수 없는 상태입니다"
+            alert.informativeText = reason
+        }
+        alert.addButton(withTitle: "확인")
+        show(alert)
+    }
+
+    private func finishInstaller() {
+        isRunningInstaller = false
+        setInstallerControlsEnabled(true)
+    }
+
+    private func setInstallerControlsEnabled(_ enabled: Bool) {
+        uninstallButton.isEnabled = enabled
+        for row in permissionRows.values { row.button.isEnabled = enabled }
+    }
+
+    private func show(_ alert: NSAlert, then handler: ((NSApplication.ModalResponse) -> Void)? = nil) {
+        guard let window else { return }
+        alert.beginSheetModal(for: window) { response in handler?(response) }
+    }
+
+    /// 계획 전문을 담는 상자. 스크롤되고 선택할 수 있다 — 읽고 확인하라고 내놓은 글이다.
+    private static func makePlanView(_ text: String) -> NSView {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 200))
+        textView.string = text
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        textView.textContainerInset = NSSize(width: 6, height: 6)
+
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 200))
+        scroll.documentView = textView
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        scroll.autohidesScrollers = true
+        return scroll
     }
 
     // MARK: - 저장
@@ -421,8 +598,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         let separator = Self.makeSeparator()
         let permissionSeparator = Self.makeSeparator()
-        let permissionHeader = NSTextField(labelWithString: "권한")
-        permissionHeader.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        let permissionTitle = NSTextField(labelWithString: "권한")
+        permissionTitle.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+
+        // 제거는 항목 하나의 조치가 아니라 설치한 것 전체를 되돌리는 일이라 머리말 옆에 둔다.
+        uninstallButton.bezelStyle = .rounded
+        uninstallButton.controlSize = .small
+        uninstallButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        uninstallButton.target = self
+        uninstallButton.action = #selector(performUninstall)
+        uninstallButton.isHidden = true
+
+        let permissionHeader = NSStackView(views: [permissionTitle, NSView(), uninstallButton])
+        permissionHeader.orientation = .horizontal
+        permissionHeader.alignment = .firstBaseline
+        permissionHeader.distribution = .fill
+        permissionHeader.spacing = Self.columnSpacing
 
         buildPermissionGrid()
 
@@ -475,6 +666,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             introLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             noticeLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             buttonRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            permissionHeader.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
         return content
     }

@@ -48,4 +48,25 @@ public enum InstallPaths {
 
     /// 로그인 항목(LaunchAgent) 라벨. `scripts/uninstall.sh` 가 같은 값을 지운다.
     public static let agentLabel = bundleIdentifier + ".agent"
+
+    // MARK: - 번들이 품는 설치 스크립트
+    //
+    // 앱의 [설치] 버튼은 **터미널에서 쓰는 것과 같은 스크립트**를 관리자 인증을 거쳐 실행한다.
+    // 설치 로직을 Swift 로 다시 구현하지 않는다 — 두 벌이 되면 반드시 어긋난다.
+    // `scripts/build-app.sh` 가 아래 경로에 넣고, 그 뒤에 서명한다(내용이 서명에 봉인된다).
+
+    /// 번들 안에서 설치 스크립트가 놓이는 자리. `build-app.sh` 와 같은 값이어야 한다.
+    public static let bundledScriptsSubpath = "Contents/Resources/scripts"
+
+    public static let installScriptName = "install.sh"
+    public static let uninstallScriptName = "uninstall.sh"
+
+    /// 번들 경로에서 설치 스크립트의 절대 경로를 만든다.
+    ///
+    /// 앱은 **자기 번들 경로만** 넘긴다. 임의 경로를 받는 자리가 없어야, 인증 창 뒤에서
+    /// 실행되는 것이 무엇인지 코드만 읽고 알 수 있다.
+    public static func bundledScript(_ name: String, inBundleAt bundlePath: String) -> String {
+        let base = bundlePath.hasSuffix("/") ? String(bundlePath.dropLast()) : bundlePath
+        return "\(base)/\(bundledScriptsSubpath)/\(name)"
+    }
 }

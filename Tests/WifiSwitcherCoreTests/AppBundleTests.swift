@@ -69,6 +69,35 @@ struct AppBundleTests {
         #expect(script.contains("codesign --verify"))
     }
 
+    /// 앱의 [설치] 버튼은 번들 안 스크립트를 부른다. 조립이 그 파일을 빠뜨리면 버튼이 죽는다.
+    @Test("번들이 설치 스크립트를 품고, Swift 가 아는 자리에 놓는다")
+    func embedsInstallScripts() throws {
+        let script = try String(
+            contentsOf: RepositoryLayout.root.appendingPathComponent("scripts/build-app.sh"), encoding: .utf8
+        )
+        // 경로가 갈라지면 앱은 "설치 스크립트가 없습니다" 로 조용히 물러난다.
+        #expect(script.contains("Contents/Resources/scripts"))
+        #expect(InstallPaths.bundledScriptsSubpath == "Contents/Resources/scripts")
+
+        // install.sh 는 자기 위치 기준으로 원본을 찾는다. 넷이 한자리에 있어야 한다.
+        for name in ["install.sh", "uninstall.sh", "apply", "save-config", "config.example.json"] {
+            #expect(script.contains(name), "번들에 \(name) 을 넣지 않는다")
+        }
+        #expect(script.contains(InstallPaths.installScriptName))
+        #expect(script.contains(InstallPaths.uninstallScriptName))
+    }
+
+    /// 서명은 번들 안 파일을 봉인한다. 스크립트를 넣기 전에 서명하면 봉인이 비어 버린다.
+    @Test("설치 스크립트를 넣은 뒤에 서명한다")
+    func signsAfterEmbeddingScripts() throws {
+        let script = try String(
+            contentsOf: RepositoryLayout.root.appendingPathComponent("scripts/build-app.sh"), encoding: .utf8
+        )
+        let embedIndex = try #require(script.range(of: "BUNDLED_SCRIPTS_DIR/$script"))
+        let signIndex = try #require(script.range(of: "codesign --force --sign -"))
+        #expect(embedIndex.lowerBound < signIndex.lowerBound)
+    }
+
     @Test("아이콘이 아직 없어도 조립이 멈추지 않는다")
     func toleratesMissingIcons() throws {
         // 아이콘은 다른 작업으로 만들어진다. 없으면 앱은 SF Symbols 로 대신 그린다.

@@ -50,6 +50,28 @@ public enum PrivilegedShell {
         return path.allSatisfy { allowed.contains($0) }
     }
 
+    /// 앱 번들 안의 스크립트 경로로 허용되는가.
+    ///
+    /// `isSafePath` 보다 **공백 하나만** 넓다. 제품명이 `EXEM Wifi Switcher.app` 이라
+    /// 번들 경로에는 공백이 반드시 들어가는데, 이름을 바꿀 수는 없기 때문이다.
+    /// 공백은 작은따옴표 안에서도 AppleScript 문자열 안에서도 아무 일도 하지 않는다.
+    /// 나머지(`'` `"` `\` 제어문자 등)는 그대로 막는다 — 여전히 허용 목록 방식이다.
+    ///
+    /// 설정 저장 경로에는 이 완화를 쓰지 않는다. 그 경로는 우리가 만들고 공백이 필요 없다.
+    public static func isSafeBundleScriptPath(_ path: String) -> Bool {
+        guard path.hasPrefix("/"), path.count <= 1024 else { return false }
+        guard !path.hasSuffix(" ") else { return false }
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+/ ")
+        return path.allSatisfy { allowed.contains($0) }
+    }
+
+    /// sudoers 규칙과 홈 디렉터리를 찾는 데 쓰이는 계정 이름. 설치 스크립트의 검사와 같은 규칙이다.
+    public static func isSafeUserName(_ name: String) -> Bool {
+        guard !name.isEmpty, name.count <= 64 else { return false }
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        return name.allSatisfy { allowed.contains($0) }
+    }
+
     /// `'<헬퍼>' '<임시파일>'` — 인자 두 개짜리 명령 하나. 그 밖의 것은 실행하지 않는다.
     public static func adminCommand(helper: String, staged: String) throws -> String {
         guard isSafePath(helper) else { throw ShellError.unsafePath(helper) }
@@ -283,5 +305,15 @@ public enum PathDisplay {
         let prefix = home.hasSuffix("/") ? home : home + "/"
         guard path.hasPrefix(prefix) else { return path }
         return "~/" + path.dropFirst(prefix.count)
+    }
+
+    /// 글 **안에 섞여 있는** 홈 디렉터리를 전부 `~` 로 줄인다.
+    ///
+    /// 설치 계획(`--dry-run` 출력)처럼 여러 경로가 문장에 섞여 나오는 글에 쓴다.
+    /// 그 글은 문제를 보고할 때 그대로 복사되기도 하므로 계정 이름을 남기지 않는다.
+    public static func abbreviate(in text: String, home: String = NSHomeDirectory()) -> String {
+        guard !home.isEmpty, home != "/" else { return text }
+        let trimmed = home.hasSuffix("/") ? String(home.dropLast()) : home
+        return text.replacingOccurrences(of: trimmed, with: "~")
     }
 }

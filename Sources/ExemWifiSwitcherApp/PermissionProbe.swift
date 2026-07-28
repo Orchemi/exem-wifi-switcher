@@ -18,6 +18,7 @@ enum PermissionProbe {
             sudoersInstalled: install.sudoers,
             saveConfigInstalled: install.saveConfig,
             isAdministrator: install.administrator,
+            installerAvailable: install.installer,
             location: location,
             notifications: notifications
         )
@@ -32,6 +33,7 @@ enum PermissionProbe {
             sudoersInstalled: install.sudoers,
             saveConfigInstalled: install.saveConfig,
             isAdministrator: install.administrator,
+            installerAvailable: install.installer,
             location: location,
             notifications: notificationPermissionBlocking()
         )
@@ -41,15 +43,28 @@ enum PermissionProbe {
 
     /// 파일이 놓여 있는지만 본다. `sudo` 를 시험 삼아 실행하지 않는다 —
     /// 상태를 보려고 권한 동작을 실제로 돌리는 것은 진단이 할 일이 아니다.
-    private static func installState() -> (apply: Bool, sudoers: Bool, saveConfig: Bool, administrator: Bool) {
+    private static func installState()
+        -> (apply: Bool, sudoers: Bool, saveConfig: Bool, administrator: Bool, installer: Bool)
+    {
         let manager = FileManager.default
         return (
             apply: manager.isExecutableFile(atPath: InstallPaths.applyScript),
             // 파일 내용은 root 만 읽을 수 있지만(0440), 있는지 없는지는 확인할 수 있다.
             sudoers: manager.fileExists(atPath: InstallPaths.sudoersFile),
             saveConfig: manager.isExecutableFile(atPath: InstallPaths.saveConfigScript),
-            administrator: PrivilegedShell.currentUserIsAdministrator()
+            administrator: PrivilegedShell.currentUserIsAdministrator(),
+            installer: bundledInstallerAvailable()
         )
+    }
+
+    /// 번들이 설치 스크립트를 품고 있는가. `swift run` 으로 띄운 실행 파일에는 없다.
+    static func bundledInstallerAvailable() -> Bool {
+        let manager = FileManager.default
+        return [InstallPaths.installScriptName, InstallPaths.uninstallScriptName].allSatisfy {
+            manager.isExecutableFile(
+                atPath: InstallPaths.bundledScript($0, inBundleAt: Bundle.main.bundlePath)
+            )
+        }
     }
 
     // MARK: - 알림 권한

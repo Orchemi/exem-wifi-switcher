@@ -78,12 +78,12 @@ public enum SystemSettingsPane: Equatable, Sendable {
 }
 
 /// 항목이 어긋났을 때 앱이 내놓을 수 있는 손잡이.
-///
-/// **앱은 sudo 를 대신 실행하지 않는다.** 설치가 필요한 항목에서 앱이 할 수 있는 일은
-/// 명령을 정확히 알려주고 복사해 주는 것까지다.
 public enum PermissionRemedy: Equatable, Sendable {
     case none
-    /// 사용자가 터미널에서 직접 실행해야 한다
+    /// 앱 안에서 설치한다 — 무엇을 설치할지 먼저 보여주고, 관리자 인증을 받아
+    /// **번들 안의 `install.sh` 를 그대로** 실행한다 (터미널로 하는 것과 같은 스크립트)
+    case install
+    /// 터미널에서 직접 실행해야 한다. 번들 안에 설치 스크립트가 없을 때의 길이다
     case runCommand(String)
     case openSettings(SystemSettingsPane)
 }
@@ -122,6 +122,8 @@ public struct PermissionInput: Equatable, Sendable {
     public var saveConfigInstalled: Bool
     /// 지금 계정이 관리자 그룹인가. 아니면 설정 저장이 원리상 불가능하다
     public var isAdministrator: Bool
+    /// 번들 안에 설치 스크립트가 있는가. 없으면(번들 밖 실행) 앱이 설치를 대신할 수 없다
+    public var installerAvailable: Bool
     public var location: LocationAuthorizationState
     public var notifications: NotificationPermission
 
@@ -130,6 +132,7 @@ public struct PermissionInput: Equatable, Sendable {
         sudoersInstalled: Bool,
         saveConfigInstalled: Bool,
         isAdministrator: Bool,
+        installerAvailable: Bool,
         location: LocationAuthorizationState,
         notifications: NotificationPermission
     ) {
@@ -137,6 +140,7 @@ public struct PermissionInput: Equatable, Sendable {
         self.sudoersInstalled = sudoersInstalled
         self.saveConfigInstalled = saveConfigInstalled
         self.isAdministrator = isAdministrator
+        self.installerAvailable = installerAvailable
         self.location = location
         self.notifications = notifications
     }
@@ -148,10 +152,16 @@ public struct PermissionInput: Equatable, Sendable {
 /// 두 곳이 각자 판단하면 같은 시스템을 두고 다른 답을 내놓는 날이 온다.
 public struct PermissionReport: Equatable, Sendable {
 
-    /// 설치·복구에 쓰는 명령. 앱이 대신 실행하지 않고 이 문자열을 그대로 보여준다.
+    /// 번들 밖에서 실행 중일 때 안내하는 명령. 그때는 앱이 설치를 대신할 수 없다.
     public static let installCommand = "./scripts/install.sh"
 
     public let items: [PermissionItem]
+
+    /// 앱이 제거를 대신할 수 있는 상태인가.
+    ///
+    /// 하나라도 설치돼 있으면 제거 대상이 있다는 뜻이다 — 반쯤 설치된 상태도 정리 대상이다.
+    /// 설치 화면과 달리 항목별 조치가 아니라 섹션 전체에 붙는 손잡이라 여기서 따로 답한다.
+    public let canUninstall: Bool
 
     public func item(_ subject: PermissionSubject) -> PermissionItem {
         // 항목은 항상 넷 다 만든다 — 없는 항목을 조회하는 경로가 생기지 않는다.
@@ -164,24 +174,48 @@ public struct PermissionReport: Equatable, Sendable {
     }
 
     public static func resolve(_ input: PermissionInput) -> PermissionReport {
-        PermissionReport(items: [
-            switching(input),
-            saving(input),
-            location(input),
-            notification(input),
-        ])
+        PermissionReport(
+            items: [
+                switching(input),
+                saving(input),
+                location(input),
+                notification(input),
+            ],
+            canUninstall: input.installerAvailable
+                && (input.applyInstalled || input.saveConfigInstalled || input.sudoersInstalled)
+        )
+    }
+
+    /// 설치가 필요할 때 내놓을 손잡이와 그 설명.
+    ///
+    /// 앱이 설치할 수 있으면 버튼 하나로 끝난다. 번들 밖에서 돌고 있으면 그럴 수 없으므로
+    /// 터미널 명령을 내민다 — **할 수 없는 것을 할 수 있는 척하지 않는다.**
+    private static func installRemedy(_ input: PermissionInput) -> (advice: String, remedy: PermissionRemedy) {
+        guard input.installerAvailable else {
+            return (
+                "터미널에서 \(installCommand) 를 실행하세요. (앱 번들 밖에서 실행 중이라 여기서 설치할 수 없습니다)",
+                .runCommand(installCommand)
+            )
+        }
+        // 이 문구는 설정 창과 `--diagnose` 가 함께 쓴다. 터미널에는 누를 버튼이 없으므로
+        // "아래 버튼" 이 아니라 **버튼이 어디 있는지**를 적는다 — 두 자리에서 다 맞는 말이어야 한다.
+        return (
+            "설정 창의 [설치] 를 누르면, 무엇을 설치할지 보여주고 관리자 인증을 한 번 받습니다.",
+            .install
+        )
     }
 
     // MARK: - 전환 권한
 
     private static func switching(_ input: PermissionInput) -> PermissionItem {
+        let install = installRemedy(input)
         guard input.applyInstalled else {
             return PermissionItem(
                 subject: .switching,
                 state: .actionNeeded,
                 status: "설치되지 않음",
-                advice: "앱은 관리자 권한을 대신 얻지 않습니다. 터미널에서 \(installCommand) 를 실행하세요.",
-                remedy: .runCommand(installCommand)
+                advice: install.advice,
+                remedy: install.remedy
             )
         }
         // 스크립트만 있고 규칙이 없으면 겉보기에는 설치된 상태다. 전환할 때마다 암호를 물어 실패한다.
@@ -190,9 +224,8 @@ public struct PermissionReport: Equatable, Sendable {
                 subject: .switching,
                 state: .actionNeeded,
                 status: "무암호 규칙 없음",
-                advice: "전환 스크립트는 있지만 sudoers 규칙이 없어 전환이 실패합니다. "
-                    + "터미널에서 \(installCommand) 를 다시 실행하세요.",
-                remedy: .runCommand(installCommand)
+                advice: "전환 스크립트는 있지만 sudoers 규칙이 없어 전환이 실패합니다. " + install.advice,
+                remedy: install.remedy
             )
         }
         return PermissionItem(
@@ -208,12 +241,13 @@ public struct PermissionReport: Equatable, Sendable {
 
     private static func saving(_ input: PermissionInput) -> PermissionItem {
         guard input.saveConfigInstalled else {
+            let install = installRemedy(input)
             return PermissionItem(
                 subject: .saving,
                 state: .actionNeeded,
                 status: "설치되지 않음",
-                advice: "터미널에서 \(installCommand) 를 실행하세요.",
-                remedy: .runCommand(installCommand)
+                advice: install.advice,
+                remedy: install.remedy
             )
         }
         // 설치로 해결되지 않는 상태다. 실행해도 달라지지 않을 명령을 내밀지 않는다.

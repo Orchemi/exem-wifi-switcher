@@ -14,6 +14,7 @@ struct PermissionReportTests {
         sudoersInstalled: Bool = true,
         saveConfigInstalled: Bool = true,
         isAdministrator: Bool = true,
+        installerAvailable: Bool = true,
         location: LocationAuthorizationState = .granted,
         notifications: NotificationPermission = .allowed
     ) -> PermissionInput {
@@ -22,6 +23,7 @@ struct PermissionReportTests {
             sudoersInstalled: sudoersInstalled,
             saveConfigInstalled: saveConfigInstalled,
             isAdministrator: isAdministrator,
+            installerAvailable: installerAvailable,
             location: location,
             notifications: notifications
         )
@@ -64,15 +66,23 @@ struct PermissionReportTests {
 
     // MARK: - 전환 권한
 
-    @Test("전환 권한이 없으면 설치 명령을 안내한다")
+    @Test("전환 권한이 없으면 앱 안에서 설치할 수 있게 한다")
     func switchingNotInstalled() {
         let item = item(.switching, input(applyInstalled: false, sudoersInstalled: false))
         #expect(item.state == .actionNeeded)
+        #expect(item.remedy == .install)
+        // 무엇이 일어날지 미리 말한다 — 누르면 계획을 보여주고 인증을 한 번 받는다.
+        #expect(item.advice?.contains("설치") == true)
+        #expect(item.advice?.contains("인증") == true)
+        #expect(PermissionReport.resolve(input(applyInstalled: false)).needsAttention)
+    }
+
+    @Test("번들 밖에서 실행 중이면 앱이 설치할 수 있는 척하지 않는다")
+    func switchingWithoutBundledInstaller() {
+        let item = item(.switching, input(applyInstalled: false, installerAvailable: false))
         #expect(item.remedy == .runCommand(PermissionReport.installCommand))
         #expect(item.advice?.contains(PermissionReport.installCommand) == true)
-        // 앱이 sudo 를 대신 실행하지 않는다는 사실을 여기서 말한다.
         #expect(item.advice?.contains("터미널") == true)
-        #expect(PermissionReport.resolve(input(applyInstalled: false)).needsAttention)
     }
 
     @Test("스크립트는 있는데 무암호 규칙이 없으면 그 사실을 따로 말한다")
@@ -82,16 +92,19 @@ struct PermissionReportTests {
         let notInstalled = item(.switching, input(applyInstalled: false))
         #expect(ruleMissing.state == .actionNeeded)
         #expect(ruleMissing.status != notInstalled.status)
-        #expect(ruleMissing.remedy == .runCommand(PermissionReport.installCommand))
+        #expect(ruleMissing.remedy == .install)
     }
 
     // MARK: - 설정 저장 권한
 
-    @Test("저장 권한이 없으면 같은 설치 명령을 안내한다")
+    @Test("저장 권한이 없으면 같은 설치로 안내한다")
     func savingNotInstalled() {
-        let item = item(.saving, input(saveConfigInstalled: false))
-        #expect(item.state == .actionNeeded)
-        #expect(item.remedy == .runCommand(PermissionReport.installCommand))
+        let missing = item(.saving, input(saveConfigInstalled: false))
+        #expect(missing.state == .actionNeeded)
+        #expect(missing.remedy == .install)
+
+        let withoutInstaller = item(.saving, input(saveConfigInstalled: false, installerAvailable: false))
+        #expect(withoutInstaller.remedy == .runCommand(PermissionReport.installCommand))
     }
 
     @Test("관리자 계정이 아니면 설치로 해결되지 않는다고 말한다")
@@ -106,7 +119,35 @@ struct PermissionReportTests {
     @Test("저장 권한이 아예 없으면 계정 종류보다 설치가 먼저다")
     func savingMissingHelperComesFirst() {
         let item = item(.saving, input(saveConfigInstalled: false, isAdministrator: false))
-        #expect(item.remedy == .runCommand(PermissionReport.installCommand))
+        #expect(item.remedy == .install)
+    }
+
+    // MARK: - 되돌리기
+
+    @Test("설치된 것이 없으면 제거할 것도 없다")
+    func nothingToUninstall() {
+        let report = PermissionReport.resolve(
+            input(applyInstalled: false, sudoersInstalled: false, saveConfigInstalled: false)
+        )
+        #expect(!report.canUninstall)
+    }
+
+    @Test("반쯤 설치된 상태도 제거 대상이다", arguments: [
+        (true, false, false), (false, true, false), (false, false, true), (true, true, true),
+    ])
+    func partialInstallCanBeUndone(_ state: (apply: Bool, sudoers: Bool, saveConfig: Bool)) {
+        // 남은 조각을 지울 길이 없으면 사용자는 터미널로 밀려난다.
+        let report = PermissionReport.resolve(input(
+            applyInstalled: state.apply,
+            sudoersInstalled: state.sudoers,
+            saveConfigInstalled: state.saveConfig
+        ))
+        #expect(report.canUninstall)
+    }
+
+    @Test("번들 밖에서는 제거도 앱이 대신하지 않는다")
+    func cannotUninstallWithoutBundledInstaller() {
+        #expect(!PermissionReport.resolve(input(installerAvailable: false)).canUninstall)
     }
 
     // MARK: - 위치 권한
