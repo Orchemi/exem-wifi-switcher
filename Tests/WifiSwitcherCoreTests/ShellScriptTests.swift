@@ -55,7 +55,8 @@ struct ShellScriptTests {
     }
 
     @Test("스크립트에 문법 오류가 없다",
-          arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh", "scripts/build-app.sh"])
+          arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh",
+                      "scripts/build-app.sh", "scripts/package-release.sh"])
     func scriptsHaveValidSyntax(_ relativePath: String) throws {
         let path = RepositoryLayout.root.appendingPathComponent(relativePath).path
         let result = try run(["/bin/bash", "-n", path])
@@ -202,7 +203,7 @@ struct ShellScriptTests {
 
     @Test("스크립트에 사용자 홈 경로가 하드코딩돼 있지 않다",
           arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh", "scripts/build-app.sh",
-                      "Tests/shell/apply-tests.sh"])
+                      "scripts/package-release.sh", "Tests/shell/apply-tests.sh"])
     func scriptsHaveNoHardcodedHomePath(_ relativePath: String) throws {
         // 문자열을 조립해서 만든다 — 이 파일 자신이 RULES.md 의 사전 점검 grep 에 걸리지 않도록.
         let homePrefix = "/" + "Users" + "/"
