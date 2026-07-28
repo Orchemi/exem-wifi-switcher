@@ -73,9 +73,12 @@ struct PermissionReportTests {
         let item = item(.switching, input(applyInstalled: false, sudoersInstalled: false))
         #expect(item.state == .actionNeeded)
         #expect(item.remedy == .install)
-        // 무엇이 일어날지 미리 말한다 — 누르면 계획을 보여주고 인증을 한 번 받는다.
-        #expect(item.advice?.contains("설치") == true)
-        #expect(item.advice?.contains("인증") == true)
+        // **버튼이 곧 조치다.** 그 옆에 "[설치] 를 누르면…" 을 적으면 같은 말이 두 번 있는 것이고,
+        // 정작 왜 이 권한이 필요한지가 그 문장에 밀려난다. 그 자리에 남는 줄은 '왜' 여야 한다.
+        #expect(item.advice == nil)
+        #expect(item.note == item.purpose)
+        // 대가는 미리 말한다 — 관리자 인증을 한 번 받는다.
+        #expect(item.note.contains("관리자 인증"))
         #expect(PermissionReport.resolve(input(applyInstalled: false)).needsAttention)
     }
 

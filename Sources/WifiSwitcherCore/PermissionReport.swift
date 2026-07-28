@@ -28,14 +28,19 @@ public enum PermissionSubject: String, CaseIterable, Sendable {
     /// 특히 Wi-Fi 도구가 위치 권한을 달라고 할 때 그렇다.
     ///
     /// 판정이 아니라 주제의 성질이므로 상태와 무관하게 늘 같다.
+    ///
+    /// **여기 적는 것은 두 가지뿐이다 — 왜 필요한가, 그리고 무엇을 대가로 치르는가**
+    /// (관리자 인증 한 번 · 위치 정보를 어디에 쓰는가). **앱이 어떻게 동작하는지는 적지 않는다.**
+    /// 바로 옆에 [설치] 버튼이 있는데 "[설치] 를 누르면…" 이라고 적는 것은 화면이 제 이야기를
+    /// 자기가 하는 꼴이다. 무엇을 설치하는지는 그 버튼을 눌렀을 때 계획 창이 전부 보여준다.
     public var purpose: String {
         switch self {
         case .switching:
-            return "IP 구성을 바꾸려면 관리자 권한이 필요합니다. 설치 때 등록한 규칙으로 전환할 때는 암호를 묻지 않습니다."
+            return "네트워크 구성을 바꾸려면 관리자 권한이 필요합니다. 설치할 때 관리자 인증을 한 번 받고, 이후 전환할 때는 묻지 않습니다."
         case .saving:
-            return "설정 파일은 root 소유라 저장할 때 관리자 인증을 한 번 받습니다. 전환할 때는 묻지 않습니다."
+            return "입력한 값은 관리자 권한으로 실행되는 명령에 그대로 쓰이므로, 아무나 고칠 수 없는 자리에 둡니다. 저장할 때 관리자 인증을 한 번 받습니다."
         case .location:
-            return "macOS 는 Wi-Fi 이름을 위치 정보로 다룹니다. 이 권한이 없으면 사내인지 아닌지 판단하지 못합니다."
+            return "macOS 는 Wi-Fi 이름을 위치 정보로 다룹니다. 사내인지 아닌지는 이 이름으로만 알 수 있어, 자동 전환에는 이 권한이 필요합니다."
         case .notification:
             return "전환한 사실을 알립니다. 없어도 전환은 되지만 IP 가 언제 바뀌었는지 알 수 없습니다."
         }
@@ -184,6 +189,10 @@ public struct PermissionItem: Equatable, Sendable {
 
     /// 화면에 붙는 설명 한 줄 — 조치가 따로 있으면 그것을, 아니면 왜 필요한지를 적는다.
     /// 둘을 함께 쌓으면 네 항목이 여덟 줄이 된다.
+    ///
+    /// **버튼이 대신 말하는 조치는 `advice` 에 넣지 않는다.** 옆에 [설치] 가 있는데
+    /// "[설치] 를 누르면…" 이라고 적으면 같은 말이 두 번 있는 것이고, 정작 **왜 필요한지**를
+    /// 적을 자리가 그 문장에 밀려 사라진다.
     public var note: String { advice ?? purpose }
 
     /// `--diagnose` 한 줄. 화면과 **같은 판정에서** 나온다.
@@ -283,6 +292,8 @@ public struct PermissionReport: Equatable, Sendable {
     /// 앱이 설치할 수 있으면 버튼 하나로 끝난다. 번들 밖에서 돌고 있으면 그럴 수 없으므로
     /// 터미널 명령을 내민다 — **할 수 없는 것을 할 수 있는 척하지 않는다.**
     ///
+    /// 버튼을 내놓을 수 있는 쪽은 **설명을 달지 않는다**(`advice == nil`). 버튼이 곧 조치이고,
+    /// 그 자리에 남는 한 줄은 "왜 이 권한이 필요한가"(`purpose`) 여야 한다.
     private static func installRemedy(_ input: PermissionInput) -> (advice: String?, remedy: PermissionRemedy) {
         guard input.installerAvailable else {
             return (
@@ -290,10 +301,7 @@ public struct PermissionReport: Equatable, Sendable {
                 .runCommand(installCommand)
             )
         }
-        return (
-            "설정 창의 [설치] 를 누르면, 무엇을 설치할지 보여주고 관리자 인증을 한 번 받습니다.",
-            .install
-        )
+        return (nil, .install)
     }
 
     // MARK: - 전환 권한
@@ -317,7 +325,7 @@ public struct PermissionReport: Equatable, Sendable {
                 state: .actionNeeded,
                 status: "무암호 규칙 없음",
                 advice: [
-                    "전환 스크립트는 있지만 sudoers 규칙이 없어 전환이 실패합니다.",
+                    "전환 스크립트는 있지만 무암호 규칙이 없어 전환할 때마다 암호를 물어 실패합니다.",
                     install.advice,
                 ].compactMap { $0 }.joined(separator: " "),
                 remedy: install.remedy

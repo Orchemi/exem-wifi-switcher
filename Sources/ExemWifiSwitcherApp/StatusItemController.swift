@@ -530,12 +530,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     /// 실패 원문만으로는 무엇을 해야 할지 알 수 없는 경우에 한 줄을 덧붙인다.
+    ///
+    /// **터미널로 보내지 않는다.** 앱이 설치를 대신하게 된 뒤로도 이 두 줄만 옛 안내로 남아 있었다 —
+    /// 창에서 버튼 한 번이면 되는 일에 터미널 명령을 내미는 셈이었다.
     private static func remedy(for message: String) -> String? {
         if message.contains("password is required") || message.contains("sudo") {
-            return "암호 없이 실행할 권한이 없습니다. 터미널에서 ./scripts/install.sh 를 다시 실행하세요."
+            return "무암호 규칙이 없어 전환할 때마다 암호를 묻습니다. 설정 창의 권한 섹션에서 다시 설치하세요."
         }
         if message.contains(InstallPaths.applyScript) {
-            return "전환 권한이 설치돼 있지 않습니다. 터미널에서 ./scripts/install.sh 를 실행하세요."
+            return "전환 권한이 설치돼 있지 않습니다. 설정 창의 권한 섹션에서 설치하세요."
         }
         return nil
     }
