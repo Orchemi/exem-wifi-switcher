@@ -68,14 +68,36 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         return false
     }
 
+    /// 사용자가 ⌘-드래그로 옮겨 둔 아이콘 자리를 기억하는 이름.
+    ///
+    /// **한 번 정하면 바꾸지 마라.** macOS 는 이 이름으로 `UserDefaults` 에
+    /// `NSStatusItem Preferred Position <이름>` 을 적어 둔다 — 이름을 바꾸면 사용자가 옮겨 둔 자리를
+    /// 통째로 잃고 아이콘이 다시 왼쪽 끝(노치 자리)으로 돌아간다.
+    private static let statusItemAutosaveName = "status-item"
+
     override init() {
         autoSwitchEnabled = AutoSwitchPreferences.isEnabled(in: UserDefaults.standard)
         super.init()
         menu.delegate = self
         menu.autoenablesItems = false
         statusItem.menu = menu
-        // 첫 관측이 오기 전에는 보여줄 상태가 없다. 잠깐 '오류' 아이콘을 띄웠다 바꾸느니 늦게 나타나는 편이 낫다.
-        statusItem.isVisible = false
+        // 아이콘 자리를 기억시킨다.
+        //
+        // 이것이 없으면 아이콘은 **뜰 때마다 남은 자리 중 왼쪽 끝**에 놓인다. 노치가 있는 Mac 에서
+        // 그 자리는 노치에 물리는 자리다 (실측: 노치가 663 에서 시작하는데 왼쪽 끝 자리는 676 에서
+        // 끝난다 — `StatusItemPlacement` 의 표). 옮겨 봐야 다음 로그인에 제자리로 돌아오니
+        // 사용자가 고칠 방법 자체가 없었다.
+        //
+        // 이 이름을 붙이면 ⌘ 를 누른 채 아이콘을 오른쪽(시계 쪽)으로 한 번 끌어 두는 것으로 끝난다.
+        // 메뉴 막대 오른쪽은 노치에 닿지 않는다.
+        //
+        // **`isVisible = false` 로 항목을 숨겼다 켜면 이 기억이 지워진다.** 실측으로 갈라 본 자리다 —
+        // 자리를 심어 두고 띄웠을 때, 켠 채로 시작하면 그 자리에 놓였고(x=1097 · 저장값 남음),
+        // 숨겼다 1초 뒤에 켜면 저장값이 사라지고 왼쪽 끝(x=613 · 노치 자리)으로 돌아갔다.
+        // 그래서 '첫 관측 전에는 숨겨 둔다' 를 걷어냈다. 그 대신 치르는 값은 관측이 오기 전 몇백 ms 동안
+        // **폭 16pt 짜리 빈자리**가 보이는 것뿐이고(실측), 원래 피하려던 것 — 틀린 아이콘을 잠깐 보여
+        // 주는 일 — 은 그대로 일어나지 않는다. 자리는 이미 잡혀 있으니 아이콘이 채워질 때 튀지도 않는다.
+        statusItem.autosaveName = Self.statusItemAutosaveName
     }
 
     // MARK: - 수명
