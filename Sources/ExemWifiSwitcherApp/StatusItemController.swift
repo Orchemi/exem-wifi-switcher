@@ -555,7 +555,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         openSettings()
     }
 
-    private func openSettings() {
+    /// 설정 창을 연다. 이미 열려 있으면 앞으로 가져온다 (`present` 가 `NSApp.activate` 까지 한다).
+    ///
+    /// **설정 창으로 들어가는 문은 이 함수 하나다** — 메뉴의 `설정…` · 첫 실행 온보딩 ·
+    /// 다시 열기(`AppDelegate.applicationShouldHandleReopen`) · 다른 자리의 사본이 남긴 신호가 모두 여기로 온다.
+    func openSettings() {
         // 위치 권한은 값을 넘기지 않고 **물어보는 길**을 넘긴다 — 창이 열려 있는 동안에도 바뀌기 때문이다.
         let controller = settingsWindow ?? SettingsWindowController(
             locationAuthorization: { [weak self] in self?.locationAuthority.state ?? .notDetermined },
