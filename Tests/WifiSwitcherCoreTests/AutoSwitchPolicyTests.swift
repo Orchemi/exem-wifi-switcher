@@ -425,18 +425,6 @@ struct AutoSwitchPolicyTests {
         #expect(AutoSwitchPolicy.decide(context(), state: state, now: Self.t0) == .apply(profile: "office"))
     }
 
-    @Test("실패 기록을 지워도 사용자의 수동 선택은 남는다")
-    func clearingAttemptsKeepsManualChoice() {
-        var state = AutoSwitchState()
-        state.adopt(ssid: "OFFICE-WIFI")
-        state.recordManualChoice(profile: "auto")
-        state.clearAttempts()
-
-        #expect(state.manualChoice == "auto")
-        #expect(AutoSwitchPolicy.decide(context(), state: state, now: Self.t0)
-            == .hold(.manualOverride(profile: "auto")))
-    }
-
     @Test("Wi-Fi 가 바뀌면 실패 기록을 잊고 다시 시작한다")
     func forgetsFailuresWhenNetworkChanges() {
         var state = AutoSwitchState()
@@ -462,36 +450,24 @@ struct AutoSwitchPolicyTests {
         #expect(state.lastFailureMessage == nil)
     }
 
-    // MARK: - 사용자의 수동 선택
+    // MARK: - 손으로 고른 전환은 자동과 겹치지 않는다
+    //
+    // **'수동 선택 우선' 은 2026-07-29 에 사라졌다.** 자동 전환이 켜져 있으면 프로필 항목이
+    // 잠기므로(`StatusModel.canSwitch`) 손으로 고르는 일 자체가 자동이 꺼져 있을 때만 일어나고,
+    // 꺼진 자동은 아무것도 되돌리지 않는다. 자동을 다시 켜는 것은 **자동에 맡기겠다는 뜻**이라
+    // 그 순간의 목표가 그대로 적용된다. 예전에는 그 선택을 기억해 두고 자동이 비켜서게 했는데
+    // (`manualChoice`), 이제 그 기억이 쓰일 자리가 없어 통째로 걷어냈다.
 
-    @Test("사용자가 손으로 고른 프로필을 자동 전환이 곧바로 되돌리지 않는다")
-    func respectsManualChoice() {
+    @Test("자동을 다시 켜면 그 순간의 목표가 그대로 적용된다")
+    func enablingAutomationAppliesItsOwnTarget() {
+        // 사용자가 자동을 끄고 손으로 DHCP 를 걸어 둔 상태를 흉내낸다 (구성은 DHCP).
         var state = AutoSwitchState()
         state.adopt(ssid: "OFFICE-WIFI")
-        state.recordManualChoice(profile: "auto")
 
-        #expect(AutoSwitchPolicy.decide(context(), state: state, now: Self.t0)
-            == .hold(.manualOverride(profile: "auto")))
-    }
-
-    @Test("자동이 고를 프로필을 사용자가 직접 골랐다면 그대로 자동에 맡긴다")
-    func manualChoiceMatchingAutomationIsNotAnOverride() {
-        var state = AutoSwitchState()
-        state.adopt(ssid: "OFFICE-WIFI")
-        state.recordManualChoice(profile: "office")
-
-        #expect(AutoSwitchPolicy.decide(context(), state: state, now: Self.t0) == .apply(profile: "office"))
-    }
-
-    @Test("Wi-Fi 가 바뀌면 수동 선택은 풀린다")
-    func manualChoiceEndsWithTheNetwork() {
-        var state = AutoSwitchState()
-        state.adopt(ssid: "OFFICE-WIFI")
-        state.recordManualChoice(profile: "auto")
-        state.adopt(ssid: "SOME-CAFE")
-
-        #expect(state.manualChoice == nil)
-        #expect(state.consecutiveFailures == 0)
+        // 꺼져 있는 동안에는 판정 자체가 서지 않는다.
+        #expect(decide(context(enabled: false), state) == .hold(.disabled))
+        // 다시 켜면 이 Wi-Fi 의 프로필로 돌아간다 — 비켜설 이유가 남아 있지 않다.
+        #expect(decide(context(), state) == .apply(profile: "office"))
     }
 
     @Test("접속이 잠깐 끊겼다고 실패 기록을 지우지 않는다")

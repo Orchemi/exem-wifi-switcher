@@ -262,11 +262,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         AutoSwitchPreferences.setEnabled(autoSwitchEnabled, in: preferenceStore)
 
         if autoSwitchEnabled {
-            // 다시 자동에 맡긴다 — 지난 수동 선택과 실패 기록을 여기서 거둔다.
+            // 다시 자동에 맡긴다 — 지난 실패 기록을 여기서 거둔다.
             //
             // 실패 기록을 남겨 두면, 원인을 고치고(install.sh 재실행 등) 토글을 껐다 켠 사용자에게
             // **아무 일도 일어나지 않는다.** 같은 Wi-Fi 에 있는 한 앱을 다시 띄우는 것 말고 길이 없어진다.
-            autoSwitchState.clearManualChoice()
             autoSwitchState.clearAttempts()
             autoSwitchHold = nil
             locationAuthority.requestIfNeeded()
@@ -342,7 +341,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                 )
                 item.target = self
                 item.representedObject = profile.name
+                // 체크 표시는 **잠긴 상태에서도** 그대로 선다 — 지금 무엇이 서 있는지를 말하는 자리다.
                 item.state = profile.name == model.activeProfileName ? .on : .off
+                // 자동 전환이 켜져 있으면 잠긴다 (권한 없음·전환 중과 같은 자리에서 정해진다).
                 item.isEnabled = model.canSwitch
                 menu.addItem(item)
             }
@@ -447,10 +448,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             switch outcome {
             case .succeeded:
                 action = .idle
-                if userInitiated {
-                    // 사용자의 선택은 이 Wi-Fi 에 머무는 동안 자동 전환이 되돌리지 않는다.
-                    autoSwitchState.recordManualChoice(profile: profileName)
-                } else {
+                // 사용자가 직접 고른 전환은 기록하지 않는다. **자동 전환이 켜져 있는 동안에는
+                // 프로필을 고를 수 없으므로**(`StatusModel.canSwitch`) 이 경로는 자동이 꺼져 있을 때만
+                // 열리고, 꺼져 있는 자동에게는 남길 기록이 없다.
+                if !userInitiated {
                     autoSwitchState.recordSuccess(at: now)
                     announceApplied(profileName)
                 }

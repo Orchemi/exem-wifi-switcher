@@ -133,8 +133,21 @@ public struct StatusModel: Equatable, Sendable {
     public let profiles: [NetworkProfile]
     /// 현재 구성과 일치하는 프로필 이름 (체크 표시)
     public let activeProfileName: String?
-    /// 프로필을 눌러 전환할 수 있는 상태인가
-    public let canSwitch: Bool
+    /// 프로필을 눌러 전환할 수 있는 상태인가.
+    ///
+    /// **잠그는 사유는 더해진다** — 전환 권한이 없다(`SwitchingPermission`) · 고를 프로필이 없다 ·
+    /// 지금 전환이 진행 중이다 · **자동 전환이 켜져 있다**(2026-07-29 오너 판단).
+    /// 마지막 것이 붙은 이유는 간단하다: 자동이 곧 되돌릴 선택을 눌리게 두면 그 클릭은 거짓말이 된다.
+    ///
+    /// 잠근다고 감추지는 않는다 — 항목과 체크 표시는 그대로 서 있다. 머리말이 사라진 뒤로는
+    /// **체크 표시가 '지금 무엇이 서 있는가' 를 지고 있는 유일한 자리**다.
+    public private(set) var canSwitch: Bool
+    /// 지금 전환이 진행 중인가.
+    ///
+    /// **`canSwitch` 로 대신 볼 수 없다.** 저 값에는 '자동 전환이 켜져 있어 잠갔다' 같은 다른 사유도
+    /// 섞여 있어서, 진행 중인지를 묻는 자리(`MenuLayout.isToldByCheckmark`)가 그것을 보면
+    /// 아무 문제 없는 정상 상태에서도 머리말을 되살린다.
+    public private(set) var isSwitching: Bool = false
     /// 앱을 띄우자마자 **설정 창을 열어야** 하는 상태인가.
     ///
     /// 머리말이 '초기 설정하기' 인 것보다 **좁다.** 저 문구는 남은 일이 하나라도 있으면 나오지만,
@@ -172,6 +185,21 @@ public struct StatusModel: Equatable, Sendable {
         let setupGaps = SetupChecklist.gaps(input)
         var model = resolveNetworkState(input, setupGaps: setupGaps)
         model.setupGaps = setupGaps
+        model.isSwitching = { if case .switching = input.action { return true }; return false }()
+        // **자동 전환이 일하고 있는 동안에는 프로필을 고를 수 없다** (2026-07-29 오너 판단).
+        //
+        // 자동이 곧 되돌릴 선택을 눌리게 두면 그 클릭은 거짓말이 된다. 자동이 틀렸을 때 손으로
+        // 덮는 길은 **자동 전환 끄기 → 고르기** 두 단계로 남는다 — 한 단계 늘지만 무엇을 하는지가
+        // 화면에 드러난다 (예전에는 고른 뒤 그 선택이 언제까지 유지되는지가 메뉴에만 적혔다).
+        //
+        // **켜짐만으로는 잠그지 않는다.** 자동 전환이 손을 쓸 수 없는 상태(위치 권한이 없는 등)에서는
+        // 토글 자체가 메뉴에 서지 않는데(`MenuLayout`), 그 상태에서 프로필까지 잠그면 **끄지도 못하고
+        // 고르지도 못하는 자리**가 된다 — 권한 없이도 수동 전환은 된다는 약속(README)이 거기서 깨진다.
+        //
+        // 위에서 정한 사유들과 **함께** 성립한다. 그래서 여기서 잠그기만 하고 풀지는 않는다.
+        let automationInCharge = input.autoSwitchEnabled
+            && MenuLayout.autoSwitchCanAct(profiles: model.profiles, setupGaps: setupGaps)
+        model.canSwitch = model.canSwitch && !automationInCharge
         model.autoSwitchEnabled = input.autoSwitchEnabled
         model.canRetryAutoSwitch = input.autoSwitchEnabled && isStalled(input.autoSwitchHold)
         model.needsNotificationPermission = input.autoSwitchEnabled && input.notifications == .denied
@@ -370,8 +398,6 @@ public struct StatusModel: Equatable, Sendable {
             return "전환 권한 미설치"
         case .noMatchingProfile?:
             return "일치하는 프로필 없음"
-        case .manualOverride(let profile)?:
-            return "\(label(profile)) 수동 선택 유지"
         case .ineffective(let profile)?:
             return "\(label(profile)) 적용 후에도 구성 그대로"
         case .backoff(_, let retryAt)?:

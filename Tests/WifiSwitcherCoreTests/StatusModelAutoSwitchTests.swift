@@ -24,7 +24,10 @@ struct StatusModelAutoSwitchTests {
 
     private func input(
         autoSwitchEnabled: Bool = true,
+        helperInstalled: Bool = true,
+        sudoersInstalled: Bool = true,
         location: LocationAuthorizationState = .granted,
+        action: ActionState = .idle,
         ssid: SSIDReading? = .connected("OFFICE-WIFI"),
         hold: AutoSwitchHold? = nil,
         notifications: NotificationPermission = .allowed
@@ -32,8 +35,10 @@ struct StatusModelAutoSwitchTests {
         StatusInput(
             config: .ready(StatusModelAutoSwitchTests.config),
             interface: StatusModelAutoSwitchTests.officeInfo,
-            helperInstalled: true,
+            helperInstalled: helperInstalled,
+            sudoersInstalled: sudoersInstalled,
             location: location,
+            action: action,
             autoSwitchEnabled: autoSwitchEnabled,
             ssid: ssid,
             autoSwitchHold: hold,
@@ -114,16 +119,80 @@ struct StatusModelAutoSwitchTests {
         #expect(note.contains(":"))
     }
 
-    @Test("사용자가 손으로 고른 상태임을 알린다")
-    func explainsManualOverride() {
-        let model = StatusModel.resolve(input(hold: .manualOverride(profile: "auto")))
-        #expect(model.autoSwitchNotes.first?.contains("수동") == true)
-    }
-
     @Test("Wi-Fi 가 꺼져 있으면 그렇게 적는다")
     func explainsWiFiOff() {
         let model = StatusModel.resolve(input(ssid: .wifiOff, hold: .wifiOff))
         #expect(model.autoSwitchNotes == ["Wi-Fi 꺼짐"])
+    }
+
+    // MARK: - 자동 전환이 켜져 있으면 프로필을 고를 수 없다
+    //
+    // 2026-07-29 오너 판단: "자동 전환이 켜져 있으면 저 2개 옵션이 보이되 disabled 처리가 되면
+    // 좋겠어. 어차피 자동 전환이 자동으로 해줄 테니까."
+    //
+    // **감추지 않고 잠근다.** 지금 무엇이 서 있는지는 체크 표시가 지고 있고(머리말이 사라진 뒤로는
+    // 그것이 유일한 자리다), 항목이 통째로 사라지면 그 정보도 함께 사라진다.
+    // 잠금 사유는 **더해진다** — 자동을 꺼도 권한이 없거나 전환 중이면 그대로 잠긴 채다.
+
+    @Test("자동 전환이 켜져 있으면 프로필을 고를 수 없다 — 항목과 체크 표시는 그대로 남는다")
+    func locksProfilesWhileAutoSwitchIsOn() {
+        let model = StatusModel.resolve(input(autoSwitchEnabled: true))
+        #expect(!model.canSwitch)
+        #expect(model.profiles.map(\.name) == ["office", "auto"])
+        #expect(model.activeProfileName == "office")
+        #expect(MenuLayout.sections(model).contains(.profiles))
+    }
+
+    @Test("자동 전환을 끄면 다시 고를 수 있다")
+    func unlocksProfilesWhenAutoSwitchIsOff() {
+        #expect(StatusModel.resolve(input(autoSwitchEnabled: false)).canSwitch)
+    }
+
+    @Test("자동 전환을 꺼도 전환 권한이 없으면 잠긴 채다")
+    func staysLockedWithoutSwitchingPermission() {
+        #expect(!StatusModel.resolve(input(autoSwitchEnabled: false, helperInstalled: false)).canSwitch)
+        #expect(!StatusModel.resolve(input(autoSwitchEnabled: false, sudoersInstalled: false)).canSwitch)
+    }
+
+    @Test("전환이 진행 중이면 자동 전환과 무관하게 잠긴다")
+    func staysLockedWhileSwitching() {
+        let switching = ActionState.switching(profile: "auto")
+        #expect(!StatusModel.resolve(input(autoSwitchEnabled: false, action: switching)).canSwitch)
+        #expect(!StatusModel.resolve(input(autoSwitchEnabled: true, action: switching)).canSwitch)
+    }
+
+    /// **자동 전환이 손을 쓸 수 없으면 잠그지 않는다.**
+    ///
+    /// 위치 권한이 없으면 자동 전환은 성립하지 않고, 그래서 토글도 메뉴에 서지 않는다
+    /// (`MenuLayout.autoSwitchCanAct`). 그 상태에서 프로필까지 잠그면 **끄지도 못하고 고르지도
+    /// 못하는 자리**가 된다 — 권한 없이도 수동 전환은 된다는 약속이 거기서 깨진다.
+    @Test("자동 전환이 서지 못하는 상태에서는 프로필을 잠그지 않는다")
+    func doesNotLockWhenAutomationCannotAct() {
+        for blocked in [
+            input(location: .denied, ssid: .permissionDenied, hold: .locationPermissionDenied),
+            input(location: .notDetermined, ssid: .permissionNotDetermined, hold: .locationPermissionRequired),
+        ] {
+            let model = StatusModel.resolve(blocked)
+            // 토글이 없다 = 자동 전환을 끌 방법이 메뉴에 없다.
+            #expect(!MenuLayout.sections(model).contains(.autoSwitch))
+            // 그러므로 고르는 길은 열어 둔다.
+            #expect(model.canSwitch)
+        }
+    }
+
+    /// **잠갔다고 머리말이 돌아오지는 않는다.**
+    ///
+    /// 정상 상태에서 머리말이 서지 않는 근거는 *체크마크가 이미 말한다* 는 것이지
+    /// *프로필을 누를 수 있다* 는 것이 아니다. 둘을 한 값으로 묶어 두면 이 변경이
+    /// 지워 둔 머리말을 통째로 되살린다 (`MenuLayout.isToldByCheckmark`).
+    @Test("자동 전환으로 잠긴 상태에서도 정상 상태의 머리말은 서지 않는다")
+    func lockDoesNotBringBackTheHeadline() {
+        let healthy = StatusModel.resolve(input(hold: .alreadyApplied(profile: "office")))
+        #expect(!MenuLayout.sections(healthy).contains(.status))
+
+        // 전환 중이라는 사실은 체크마크가 말할 수 없다 — 그 자리는 그대로 남아야 한다.
+        let switching = StatusModel.resolve(input(action: .switching(profile: "auto")))
+        #expect(MenuLayout.sections(switching).contains(.status))
     }
 
     // MARK: - 멈춘 상태에서 빠져나오는 손잡이
@@ -147,7 +216,6 @@ struct StatusModelAutoSwitchTests {
     func hidesRetryWhenHealthy() {
         #expect(!StatusModel.resolve(input(hold: .alreadyApplied(profile: "office"))).canRetryAutoSwitch)
         #expect(!StatusModel.resolve(input(hold: .settling(profile: "office"))).canRetryAutoSwitch)
-        #expect(!StatusModel.resolve(input(hold: .manualOverride(profile: "auto"))).canRetryAutoSwitch)
         // 꺼져 있으면 다시 시도할 자동 전환 자체가 없다.
         #expect(!StatusModel.resolve(input(
             autoSwitchEnabled: false, hold: .givenUp(profile: "office", failures: 5)

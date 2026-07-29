@@ -41,7 +41,7 @@ struct StatusModelMenuTextTests {
             nil, .disabled, .busy, .locationPermissionRequired, .locationPermissionDenied,
             .wifiOff, .notAssociated, .ssidUnavailable("인터페이스를 찾지 못했습니다"),
             .configUnavailable, .switchingPermissionMissing, .noMatchingProfile(ssid: "OTHER-WIFI"),
-            .alreadyApplied(profile: "office"), .manualOverride(profile: "auto"),
+            .alreadyApplied(profile: "office"),
             .settling(profile: "office"), .ineffective(profile: "office"),
             .backoff(profile: "office", retryAt: Date(timeIntervalSince1970: 1_800_000_000)),
             .givenUp(profile: "office", failures: 5),

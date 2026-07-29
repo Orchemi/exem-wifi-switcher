@@ -67,8 +67,6 @@ public enum AutoSwitchHold: Equatable, Sendable {
     case noMatchingProfile(ssid: String)
     /// 이미 목표 구성이다 — 평소 상태
     case alreadyApplied(profile: String)
-    /// 사용자가 이 Wi-Fi 에서 직접 다른 프로필을 골랐다
-    case manualOverride(profile: String)
     /// 방금 적용했고 구성이 따라올 시간을 주는 중이다
     case settling(profile: String)
     /// 적용은 성공했다는데 구성이 끝내 바뀌지 않았다
@@ -124,8 +122,6 @@ public struct AutoSwitchState: Equatable, Sendable {
     /// **정착한 뒤 풀린 것**이므로 다시 적용해야 한다.
     public private(set) var lastSettledAt: Date?
     public private(set) var lastFailureMessage: String?
-    /// 이 Wi-Fi 에서 사용자가 직접 고른 프로필. 자동 전환은 이 선택을 덮지 않는다.
-    public private(set) var manualChoice: String?
 
     public init() {}
 
@@ -183,7 +179,6 @@ public struct AutoSwitchState: Equatable, Sendable {
     ///
     /// 사용자가 원인을 고친 뒤(권한 재설치 등) **같은 Wi-Fi 에서** 다시 시도할 수 있어야 한다.
     /// 자동 전환을 껐다 켜거나 메뉴에서 "지금 다시 시도" 를 누르는 것이 그 문이다.
-    /// 수동 선택(`manualChoice`)은 사용자의 뜻이므로 여기서 건드리지 않는다.
     public mutating func clearAttempts() {
         attemptedProfile = nil
         consecutiveFailures = 0
@@ -191,17 +186,6 @@ public struct AutoSwitchState: Equatable, Sendable {
         lastAttemptAt = nil
         lastSuccessAt = nil
         lastSettledAt = nil
-    }
-
-    /// 사용자가 메뉴에서 직접 프로필을 골랐다. 자동 전환은 이 Wi-Fi 에 있는 동안 그 선택을 존중한다.
-    public mutating func recordManualChoice(profile: String) {
-        clearAttempts()
-        manualChoice = profile
-    }
-
-    /// 수동 선택을 거둔다 (자동 전환을 다시 켰을 때 등).
-    public mutating func clearManualChoice() {
-        manualChoice = nil
     }
 }
 
@@ -260,12 +244,7 @@ public enum AutoSwitchPolicy {
             return .hold(.noMatchingProfile(ssid: ssid))
         }
 
-        // 3) 사용자가 이 Wi-Fi 에서 직접 다른 것을 골랐다면 그 손을 밀어내지 않는다.
-        if let choice = state.manualChoice, choice != target.name {
-            return .hold(.manualOverride(profile: choice))
-        }
-
-        // 4) 이미 목표와 같으면 아무것도 하지 않는다 — 자동 전환이 스스로를 부르지 않게 하는 첫 관문이다.
+        // 3) 이미 목표와 같으면 아무것도 하지 않는다 — 자동 전환이 스스로를 부르지 않게 하는 첫 관문이다.
         //
         //    **IP 만 보지 않는다.** DNS 도 프로필이 정하는 값이라, IP·서브넷·라우터만 맞는 상태를
         //    통과시키면 사내 DNS 를 문 채 집에서 도는 구성(부분 적용·이전 프로필의 잔재)이 굳는다.
@@ -280,7 +259,7 @@ public enum AutoSwitchPolicy {
             }
         }
 
-        // 5) 같은 목표를 이미 시도했다면, 그 결과에 따라 쉬거나 멈춘다.
+        // 4) 같은 목표를 이미 시도했다면, 그 결과에 따라 쉬거나 멈춘다.
         //
         //    **시도했다는 기록이 있는데 결과가 없는 경우까지 여기서 받는다.** 어느 층에서도 잡히지
         //    않으면 판정마다 같은 명령을 다시 걸어 무한 재시도가 된다.
