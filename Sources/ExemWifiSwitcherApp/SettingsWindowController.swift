@@ -101,6 +101,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     private var observation = Observation.pending
     private var hasBeenShown = false
+    /// 시스템 설정으로 보냈다가 돌아오는 길. 되돌릴 자리인지 판단하는 것은 이쪽이다
+    /// (`SystemSettingsTrip` — 조건과 그 이유가 거기 적혀 있다).
+    private var systemSettingsTrip = SystemSettingsTrip()
     /// 이번 닫기는 미저장을 묻지 않는다 ([취소] · 저장 직후).
     private var skipsUnsavedPrompt = false
     /// 방금 저장한 내용. **설정 파일을 다시 읽기 전까지의 기준**이다 —
@@ -139,23 +142,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         )
         window.title = "\(InstallPaths.appName) 설정"
         window.isReleasedWhenClosed = false
-        // 다른 앱을 눌러도 이 창은 보이는 자리에 남는다.
-        //
-        // 이 앱은 `.accessory` 라 Dock 아이콘이 없다. 그래서 창이 한 번 다른 앱 창 뒤로 밀리면
-        // **되돌릴 손잡이가 없다** — 사용자에게는 창이 꺼진 것과 구별되지 않는다.
-        // 실측(2026-07-29): 다른 앱을 활성화해도 `isVisible` 은 계속 true 였고, 시스템 설정을
-        // 연 뒤에는 `occlusionState` 가 occluded 로 바뀌었다. 창은 닫힌 적이 없고 가려졌을 뿐이다.
-        //
-        // 그래서 창 자체를 보통 창 위(`.floating`)에 둔다. 사용자가 **직접 연** 창이고 닫기 단추가
-        // 붙어 있으므로, 볼 일이 끝나면 닫으면 된다.
-        window.level = .floating
-        // 전체화면 앱을 쓰는 중이거나 다른 Space 에 있을 때도 지금 보고 있는 화면에 나타난다.
-        // 시스템 설정에 다녀오는 길(로그인 항목·권한)이 Space 를 건너뛸 수 있어 함께 둔다.
-        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        // 창 높이(`level`)는 보통 창 그대로 둔다. 다른 앱이 이 창을 덮는 것은 정상이고,
+        // 특히 우리가 열어 준 시스템 설정을 이 창이 가리고 서면 안 된다 (2026-07-29 실기에서
+        // `.floating` 이 거부된 자리다). 덮인 뒤에 돌아오는 길은 `observeSystemSettingsReturn` 이 맡는다.
         super.init(window: window)
         window.delegate = self
         window.contentView = makeContentView()
         observeApplicationActivation()
+        observeSystemSettingsReturn()
     }
 
     /// 시스템 설정에 다녀와 앱으로 돌아오면 권한과 로그인 항목을 다시 확인한다.
@@ -176,6 +170,39 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
                 guard let self, self.window?.isVisible == true else { return }
                 self.refreshPermissions()
                 self.showLoginItemState()
+            }
+        }
+    }
+
+    /// 우리가 보낸 시스템 설정이 사라지면 설정 창을 그 자리로 되돌린다.
+    ///
+    /// 이 앱은 `.accessory` 라 Dock 아이콘이 없다. 설정 창이 시스템 설정 뒤로 밀린 뒤 시스템 설정이
+    /// 닫히면, macOS 는 **그 다음 앱**을 앞세울 뿐 우리를 불러 주지 않는다 — 설정 창은 뒤에 묻힌 채
+    /// 남고, 사용자에게는 창이 꺼진 것처럼 보인다. 실기에서 나온 말이 그것이다:
+    /// "로그인 항목 설정창을 끄면 그대로 다시 앱 설정창이 보여야지".
+    ///
+    /// 신호는 **종료**다. 시스템 설정은 창을 닫으면 프로세스가 끝난다 (macOS 26.5 실측 —
+    /// 창을 닫자 `didDeactivate` 뒤 60ms 안에 `didTerminate` 가 왔다). 비활성화를 신호로 삼으면
+    /// 사용자가 다른 앱으로 잠깐 옮기기만 해도 창이 앞으로 튀어나온다.
+    ///
+    /// **되돌릴지 말지는 코어가 정한다** (`SystemSettingsTrip`) — 우리가 보낸 길인가, 창이 아직
+    /// 열려 있는가, 이미 한 번 돌아왔는가. 여기서는 그 답을 창에 옮기기만 한다.
+    private func observeSystemSettingsReturn() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let application = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            let bundleIdentifier = application?.bundleIdentifier
+            Task { @MainActor in
+                guard let self else { return }
+                guard self.systemSettingsTrip.shouldBringWindowBack(
+                    terminatedApp: bundleIdentifier,
+                    isWindowOpen: self.window?.isVisible == true
+                ) else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                self.window?.makeKeyAndOrderFront(nil)
             }
         }
     }
@@ -542,9 +569,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     ///
     /// 알림은 우리 앱의 줄을 편 채로 열린다 (`url(revealing:)`). 나머지는 목록이 열리므로,
     /// 무엇을 찾아야 하는지는 각 항목의 안내 문구(`openGuidance`)가 미리 말해 둔다.
+    ///
+    /// **여기가 이 창에서 시스템 설정으로 나가는 유일한 문이다** — [로그인 항목 열기…] ·
+    /// 권한 표의 [설정 열기] · Wi-Fi 이름 칸 옆의 [위치 권한 열기…] 가 모두 이 자리를 지난다.
+    /// 그래서 보냈다는 사실도 여기서 적어 둔다 — 셋 다 같은 길이기 때문이다:
+    /// **이 창에서 나가 시스템 설정에서 무언가 켜고, 이 창으로 돌아온다.**
     private func open(_ pane: SystemSettingsPane) {
         guard let url = URL(string: pane.url(revealing: Bundle.main.bundleIdentifier)) else { return }
-        NSWorkspace.shared.open(url)
+        guard NSWorkspace.shared.open(url) else { return }
+        systemSettingsTrip.didOpenSystemSettings()
     }
 
     /// 복사는 눈에 보이는 변화가 없다. 눌렀는데 아무 일도 없으면 안 된 줄 안다.
@@ -826,6 +859,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         guard canSave, !skipsUnsavedPrompt else { return true }
         confirmClosingWithUnsavedValues()
         return false
+    }
+
+    /// 창을 닫으면 시스템 설정에 다녀오던 길도 접는다.
+    ///
+    /// 창이 없으면 되돌릴 자리도 없다. 표식을 남겨 두면 나중에 창을 다시 연 뒤,
+    /// 사용자가 직접 열어 본 시스템 설정을 닫을 때 창이 튀어나온다.
+    func windowWillClose(_ notification: Notification) {
+        systemSettingsTrip.didCloseWindow()
     }
 
     private func confirmClosingWithUnsavedValues() {
