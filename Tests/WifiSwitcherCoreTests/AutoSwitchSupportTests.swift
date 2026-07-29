@@ -100,7 +100,7 @@ struct EventCoalescerTests {
 @Suite("자동 전환 설정 보관")
 struct AutoSwitchPreferencesTests {
 
-    private final class MemoryStore: AutoSwitchStore {
+    private final class MemoryStore: FlagStore {
         var values: [String: Bool] = [:]
         func boolValue(forKey key: String) -> Bool? { values[key] }
         func setBool(_ value: Bool, forKey key: String) { values[key] = value }

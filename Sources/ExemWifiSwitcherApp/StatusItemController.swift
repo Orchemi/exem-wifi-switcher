@@ -24,6 +24,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var settingsWindow: SettingsWindowController?
     private var refreshTimer: Timer?
     private var monitor: NetworkChangeMonitor?
+    private var visibilityWatch: MenuBarVisibilityWatch?
     /// 같은 상태를 다시 그리지 않는다 — 메뉴가 열린 채 갱신될 때 항목이 깜박이지 않게 한다.
     private var renderedModel: StatusModel?
 
@@ -130,6 +131,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                 openSettings()
             }
         }
+
+        // 아이콘이 노치나 메뉴 막대 밖으로 밀려 보이지 않으면 한 번 알린다.
+        //
+        // `autosaveName` 으로 자리를 기억시켜 두었지만, 그것은 **사용자가 한 번 옮겨 둔 뒤에야** 듣는다.
+        // 옮기기 전까지 아이콘은 왼쪽 끝 — 노치에 물리는 자리 — 에 놓이고, 그 상태에서는 앱에 손댈
+        // 방법이 남지 않는다. 그래서 옮기라고 말해 주는 자리가 하나 필요하다.
+        let watch = MenuBarVisibilityWatch(
+            statusItem: statusItem,
+            store: preferenceStore,
+            announce: { [weak self] message in self?.notifier.post(message) }
+        )
+        visibilityWatch = watch
+        watch.start()
 
         // 옛 방식(~/Library/LaunchAgents)으로 켜 두었던 사람을 새 방식으로 옮긴다.
         // 둘 다 남겨 두면 로그인할 때 두 벌이 뜬다.

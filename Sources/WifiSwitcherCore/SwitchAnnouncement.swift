@@ -79,6 +79,20 @@ public enum SwitchAnnouncement {
         )
     }
 
+    /// 메뉴 막대에서 아이콘이 가려졌다.
+    ///
+    /// **전환 이야기가 아니지만 여기 둔다** — 알림 문구의 모양(`Message`)과 길이 규율(`shorten`)이
+    /// 이 자리에 있고, 두 벌로 나누면 톤이 갈라진다.
+    ///
+    /// 이 알림은 **설명이 아니라 조치**다. 왜 가려지는지(노치·자리 부족)를 적어 봐야 사용자가 할 일은
+    /// 하나뿐이므로, 그 하나만 적는다. 문제를 아는 것이 아니라 고치는 것이 목적이다.
+    public static func menuBarIconHidden() -> Message {
+        Message(
+            title: "메뉴 막대 아이콘 가려짐",
+            body: shorten("⌘ 를 누른 채 아이콘을 오른쪽으로 끌어 옮기세요.")
+        )
+    }
+
     private static func shorten(_ text: String) -> String {
         guard text.count > bodyLengthLimit else { return text }
         return String(text.prefix(bodyLengthLimit - 1)) + "…"
