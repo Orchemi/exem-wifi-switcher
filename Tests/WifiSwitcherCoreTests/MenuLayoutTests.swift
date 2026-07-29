@@ -93,7 +93,8 @@ struct MenuLayoutTests {
 
         // 반대로 **이름이 읽히고 있다면** 권한은 있는 것이다(`SetupChecklist`). 그때는
         // 자동 전환이 그대로 돌고 있으므로 스위치를 감추지 않는다.
-        #expect(sections(location: .notDetermined) == MenuSection.allCases)
+        // (그 상태는 아무 문제가 없는 정상 상태라 머리말은 서지 않는다)
+        #expect(sections(location: .notDetermined) == [.profiles, .autoSwitch, .app])
     }
 
     @Test("지금 일하고 있는 자동 전환의 스위치는 감추지 않는다")
@@ -112,14 +113,52 @@ struct MenuLayoutTests {
 
     // MARK: - 정상·문제 상태
 
-    @Test("전부 갖춰지면 네 무리가 다 선다")
-    func fullMenuWhenReady() {
-        #expect(sections() == MenuSection.allCases)
+    /// **정상 상태에는 머리말이 없다** (2026-07-28 오너 판단).
+    ///
+    /// `사내 고정 IP 적용 중` 은 메뉴바 아이콘과 프로필의 체크 표시가 이미 말한 것을
+    /// 세 번째로 말하는 줄이었다. 보조 줄에 세운 기준을 머리말에도 그대로 적용한다.
+    @Test("아무 문제가 없으면 상태 무리가 서지 않는다")
+    func hidesStatusWhenCheckmarkAlreadySaysIt() {
+        #expect(sections() == [.profiles, .autoSwitch, .app])
+        // 맨 위에 구분선이 남지 않는다 — 구분선은 무리 **사이에만** 들어가므로,
+        // 첫 무리가 프로필이면 그 위에는 아무것도 없다.
+        #expect(sections().first == .profiles)
+        // 설정 창으로 가는 문은 그대로 남는다 (`설정…` · ⌘,).
+        #expect(sections().contains(.app))
+    }
+
+    /// 머리말이 **체크마크가 말할 수 없는 것**을 말하는 자리는 그대로 남는다.
+    @Test("체크마크가 말할 수 없는 상태에서는 머리말이 남는다")
+    func keepsStatusWhenCheckmarkCannotSayIt() {
+        // 진행 중 · 실패 — 체크마크에는 '지금 하고 있다' 도 '실패했다' 도 없다.
+        #expect(sections(action: .switching(profile: "office")).contains(.status))
+        #expect(sections(action: .failed(profile: "office", message: "실패")).contains(.status))
+        // 고장 · 남은 일 — 설정 파일 오류 · 초기 설정 · 아직 저장 안 됨.
+        #expect(sections(config: .unusable(path: "/tmp/x.json", reason: "깨짐")).contains(.status))
+        #expect(sections(config: .missing(path: "/tmp/none.json")).contains(.status))
+        #expect(sections(config: .pristineExample(path: "/tmp/x.json")).contains(.status))
+        // 저장 권한만 없는 상태도 남은 일이다 — 체크는 서 있어도 머리말이 그것을 말한다.
+        #expect(sections(saveConfigInstalled: false).contains(.status))
+
+        // 어느 프로필도 서 있지 않으면 체크마크가 아예 없다 — 등록된 어느 값과도 다른 고정 IP.
+        let noMatching = MenuLayout.sections(StatusModel.resolve(StatusInput(
+            config: .ready(Self.config),
+            interface: InterfaceInfo(
+                configMethod: .manual,
+                ip: IPv4Address("203.0.113.5"),
+                subnet: SubnetMask("255.255.255.0"),
+                router: IPv4Address("203.0.113.1")
+            ),
+            helperInstalled: true, sudoersInstalled: true, saveConfigInstalled: true,
+            location: .granted, autoSwitchEnabled: true, ssid: .connected("OTHER-AP")
+        )))
+        #expect(noMatching.contains(.status))
     }
 
     @Test("전환 중·전환 실패는 무리를 줄이지 않는다")
     func actionStatesKeepTheMenu() {
         // 지금 벌어진 일이 머리말을 차지할 뿐, 고를 것도 끌 것도 그대로 있다.
+        // (이때는 머리말이 체크마크가 못 하는 말을 하므로 네 무리가 다 선다)
         #expect(sections(action: .switching(profile: "office")) == MenuSection.allCases)
         #expect(sections(action: .failed(profile: "office", message: "sudo: a password is required"))
             == MenuSection.allCases)
@@ -149,8 +188,8 @@ struct MenuLayoutTests {
             #expect(!sections.isEmpty)
             #expect(Set(sections).count == sections.count, "무리가 겹친다: \(sections)")
             #expect(sections == MenuSection.allCases.filter(sections.contains), "차례가 어긋났다: \(sections)")
-            // 어떤 상태에서도 들어갈 문과 나가는 문은 남는다.
-            #expect(sections.first == .status)
+            // 들어갈 문과 나가는 문은 어떤 상태에서도 남는다. **머리말은 이제 그 문이 아니다** —
+            // 정상 상태에서는 서지 않으므로, 설정 창으로 가는 자리는 `.app` 의 '설정…'(⌘,)이다.
             #expect(sections.last == .app)
         }
     }

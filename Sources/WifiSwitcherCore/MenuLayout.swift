@@ -5,7 +5,7 @@ import Foundation
 /// 메뉴는 네 무리로 읽힌다 — **지금 상태 · 고를 프로필 · 자동 전환 · 앱.**
 /// 무리마다 구분선을 넣어 어디까지가 한 이야기인지 눈으로 끊는다.
 public enum MenuSection: Equatable, Sendable, CaseIterable {
-    /// 머리말 한 줄(과 딸린 보조 줄). 언제나 있다 — 상태를 말하지 않는 순간이 없다.
+    /// 머리말 한 줄(과 딸린 보조 줄). **체크마크가 이미 말하고 있으면 서지 않는다.**
     case status
     /// 눌러서 고르는 프로필 목록. **없으면 무리째 사라진다.**
     case profiles
@@ -30,13 +30,16 @@ public enum MenuLayout {
     public static func sections(_ model: StatusModel) -> [MenuSection] {
         MenuSection.allCases.filter { section in
             switch section {
-            case .status, .app:
-                // 이 둘은 상태와 무관하게 낼 항목이 있다 (머리말 · 설정/종료).
+            case .status:
+                return !isToldByCheckmark(model)
+            case .app:
+                // 상태와 무관하게 낼 항목이 있다 (설정 · 종료).
                 //
                 // 초기 설정 중에는 머리말과 '설정…' 이 같은 창을 연다. 그래도 '설정…' 을 빼지
                 // 않는 것은 **⌘, 가 그 창으로 가는 유일한 열쇠**이고, 머리말이 눌리는 자리라는
                 // 사실은 눌러 봐야 아는 것이기 때문이다. 같은 목적지가 둘인 값은 한 줄이지만,
                 // 첫 실행에서 들어갈 문을 못 찾는 값은 그보다 크다.
+                // (머리말이 사라지는 정상 상태에서는 이 줄이 설정 창으로 가는 유일한 자리다)
                 return true
             case .profiles:
                 return !model.profiles.isEmpty
@@ -44,6 +47,27 @@ public enum MenuLayout {
                 return autoSwitchCanAct(model)
             }
         }
+    }
+
+    /// 머리말이 **프로필의 체크 표시가 이미 말한 것**을 되풀이하는가.
+    ///
+    /// `사내 고정 IP 적용 중` 은 정상 상태에서 세 번째로 같은 말을 하는 줄이다 —
+    /// 메뉴바 아이콘이 말하고, 그 아래 프로필에 체크가 서 있고, 그리고 이 줄이 있었다
+    /// (2026-07-28 오너 판단: "아래 체크와 겹치는 것 같은데 굳이 있어야 하나?").
+    /// 보조 줄에 세운 기준(정상 상태에는 줄을 두지 않는다)을 머리말에도 그대로 적용한다.
+    ///
+    /// **넷을 다 만족해야 지운다.** 하나라도 어긋나면 머리말은 체크마크가 말할 수 없는 것을
+    /// 말하고 있는 것이라 남긴다.
+    ///   - 남은 일이 없다 — 있으면 머리말은 '초기 설정하기' 이고, 그 줄은 **설정 창으로 가는 문**이다
+    ///     (그 상태에서는 프로필이 아예 없어 체크마크도 없다)
+    ///   - 딸린 줄이 없다 — 전환 실패 사유 · 설정 파일 오류 · 아직 저장 안 됨은 체크마크가 못 말한다
+    ///   - 체크가 실제로 서 있다 — 어느 프로필도 서 있지 않으면(`프로필 없음 — DHCP`) 말할 사람이 없다
+    ///   - 전환 중이 아니다 — **진행 중이라는 사실은 체크마크로 말할 수 없다** (그때 `canSwitch` 가 닫힌다)
+    private static func isToldByCheckmark(_ model: StatusModel) -> Bool {
+        model.setupGaps.isEmpty
+            && model.detail == nil
+            && model.activeProfileName != nil
+            && model.canSwitch
     }
 
     /// 자동 전환이 **지금 손을 쓸 수 있는 상태인가.**
