@@ -139,6 +139,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         )
         window.title = "\(InstallPaths.appName) 설정"
         window.isReleasedWhenClosed = false
+        // 다른 앱을 눌러도 이 창은 보이는 자리에 남는다.
+        //
+        // 이 앱은 `.accessory` 라 Dock 아이콘이 없다. 그래서 창이 한 번 다른 앱 창 뒤로 밀리면
+        // **되돌릴 손잡이가 없다** — 사용자에게는 창이 꺼진 것과 구별되지 않는다.
+        // 실측(2026-07-29): 다른 앱을 활성화해도 `isVisible` 은 계속 true 였고, 시스템 설정을
+        // 연 뒤에는 `occlusionState` 가 occluded 로 바뀌었다. 창은 닫힌 적이 없고 가려졌을 뿐이다.
+        //
+        // 그래서 창 자체를 보통 창 위(`.floating`)에 둔다. 사용자가 **직접 연** 창이고 닫기 단추가
+        // 붙어 있으므로, 볼 일이 끝나면 닫으면 된다.
+        window.level = .floating
+        // 전체화면 앱을 쓰는 중이거나 다른 Space 에 있을 때도 지금 보고 있는 화면에 나타난다.
+        // 시스템 설정에 다녀오는 길(로그인 항목·권한)이 Space 를 건너뛸 수 있어 함께 둔다.
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         super.init(window: window)
         window.delegate = self
         window.contentView = makeContentView()
