@@ -81,6 +81,40 @@ public struct ManualProfileDraft: Equatable, Sendable {
         }
     }
 
+    /// 저장된 값과 견주어 **바뀐 것이 있는가.**
+    ///
+    /// [저장]은 이것과 `hasRequiredValues` 가 **둘 다** 설 때만 눌린다. 하나만 보면
+    /// 방금 저장하고도 버튼이 살아 있어(누를 이유가 없는데 눌리는 상태) 무엇이 남았는지
+    /// 버튼으로는 알 수 없게 된다.
+    ///
+    /// **기준은 창을 열었을 때의 값이 아니라 저장된 설정이다.** 창을 열면 사내 구성을 읽어
+    /// 빈 칸이 저절로 차는데, 그 값은 **아직 저장되지 않은 값**이라 바뀐 것으로 봐야 한다.
+    /// 열었을 때를 기준으로 잡으면 자동으로 채워진 직후가 '바뀐 것 없음' 이 되어,
+    /// 저장을 놓치는 그 문제가 그대로 되살아난다. 저장된 것이 없으면 기준은 빈 값이다.
+    public func isDirty(comparedTo saved: ManualProfileDraft?) -> Bool {
+        !matches(saved ?? ManualProfileDraft())
+    }
+
+    /// 표기가 아니라 **뜻으로** 같은가.
+    ///
+    /// 앞뒤 공백, 쉼표 주변 공백 같은 차이로 '바뀌었다' 고 하면 버튼이 거짓말을 한다 —
+    /// 저장할 것이 없는데 눌리고, 누르면 같은 값을 다시 쓴다.
+    public func matches(_ other: ManualProfileDraft) -> Bool {
+        ManualProfileDraft.trim(ip) == ManualProfileDraft.trim(other.ip)
+            && ManualProfileDraft.trim(subnet) == ManualProfileDraft.trim(other.subnet)
+            && ManualProfileDraft.trim(router) == ManualProfileDraft.trim(other.router)
+            && dnsList == other.dnsList
+            && ssidList == other.ssidList
+    }
+
+    /// 적힌 DNS 서버 목록. **검증하지 않는다** — 표기 차이를 걷어내고 견주기 위한 것이다.
+    /// 나누는 기준은 저장할 때 쓰는 것과 같다 (`parseDNS`).
+    public var dnsList: [String] {
+        dns.components(separatedBy: ManualProfileDraft.dnsSeparators).filter { !$0.isEmpty }
+    }
+
+    static let dnsSeparators = CharacterSet(charactersIn: ",;").union(.whitespacesAndNewlines)
+
     /// 비어 있는 칸만 상대의 값으로 채운 초안. **사람이 적어 둔 것은 덮지 않는다.**
     ///
     /// 창을 열어 둔 채 사내 Wi-Fi 에 붙는 순간에 쓴다 — 그때 지금 구성을 읽어 빈 칸이 찬다.
@@ -250,8 +284,7 @@ extension ManualProfileDraft {
     }
 
     private static func parseDNS(_ text: String) -> Result<[String], DraftIssues> {
-        let separators = CharacterSet(charactersIn: ",;").union(.whitespacesAndNewlines)
-        let servers = text.components(separatedBy: separators).filter { !$0.isEmpty }
+        let servers = text.components(separatedBy: dnsSeparators).filter { !$0.isEmpty }
 
         if let bad = servers.first(where: { IPv4Address($0) == nil }) {
             return .failure(DraftIssues([DraftIssue(field: .dns, message: "'\(bad)' 는 IPv4 주소가 아닙니다. 쉼표로 구분해 적습니다")]))

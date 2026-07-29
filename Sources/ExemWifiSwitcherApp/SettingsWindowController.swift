@@ -96,6 +96,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private var hasBeenShown = false
     /// 이번 닫기는 미저장을 묻지 않는다 ([취소] · 저장 직후).
     private var skipsUnsavedPrompt = false
+    /// 방금 저장한 내용. **설정 파일을 다시 읽기 전까지의 기준**이다 —
+    /// 저장하자마자 [저장] 이 죽어야 하는데, 그때 관측은 아직 옛 파일을 들고 있다.
+    /// 파일이 따라잡으면 스스로 내려놓는다 (`populate`).
+    private var justSaved: (draft: ManualProfileDraft, service: String)?
 
     /// 창 너비와 라벨 열 너비를 못박는다.
     ///
@@ -180,6 +184,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     private func populate() {
+        // 설정 파일이 방금 저장한 것을 따라잡았으면 임시 기준을 내려놓는다.
+        // 계속 들고 있으면 파일이 바깥에서 바뀌어도(CLI 로 고치는 길이 있다) 옛 기준으로 견주게 된다.
+        if let justSaved, savedOfficeDraft?.matches(justSaved.draft) == true,
+           observation.readyConfig?.service == justSaved.service {
+            self.justSaved = nil
+        }
+
         // 네트워크 서비스
         let services = observation.services.isEmpty ? ["Wi-Fi"] : observation.services
         servicePopUp.removeAllItems()
@@ -333,9 +344,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         field.stringValue = value
     }
 
-    /// 저장할 수 있는 상태인지 버튼에 반영한다. 판단은 초안이 한다.
+    /// 저장할 수 있는 상태인지 버튼에 반영한다. 판단은 `canSave` 한 자리가 한다.
     private func updateSaveAvailability() {
-        saveButton.isEnabled = draft.hasRequiredValues
+        saveButton.isEnabled = canSave
     }
 
     /// 현재 DNS 설정을 **읽지 못했으면** 그 사실을 DNS 칸에 남긴다.
@@ -621,7 +632,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         // **권한을 다 갖춘 이 순간이 사람을 놓치는 자리다.** 설치가 끝나면 끝난 것처럼 느껴지는데
         // 값은 아직 설정 파일에 없다 (사내에서는 칸이 저절로 차 있어 더 그렇게 보인다).
         // 그래서 여기서 남은 한 걸음을 말하고, **그 자리에서 저장까지 갈 수 있게** 한다.
-        if operation == .install, hasUnsavedValues {
+        if operation == .install, canSave {
             offerSaveAfterInstall()
             return
         }
@@ -703,6 +714,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         updateSaveAvailability()
     }
 
+    @objc private func fieldChanged() {
+        updateSaveAvailability()
+    }
+
     @objc private func save() {
         clearIssues()
 
@@ -734,19 +749,39 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             return
         }
 
+        // 방금 저장한 것이 이제 기준이다. 관측(설정 파일 다시 읽기)이 도착하기 전까지
+        // 이 값이 없으면 저장 직후에도 [저장] 이 살아 있고 닫을 때 '저장 안 했다' 고 묻는다.
+        justSaved = (draft: draft, service: service)
+        updateSaveAvailability()
+
         onSaved()
-        // 방금 저장했다. 창을 닫으면서 '저장하지 않았다' 고 물으면 안 된다 —
-        // 관측은 아직 옛 설정 파일을 들고 있어서 그대로 두면 그 질문이 나온다.
         closeWithoutAsking()
     }
 
-    /// 저장할 값이 화면에 있는데 설정 파일에는 없는 상태인가.
+    /// 지금 저장할 것이 있는가. **[저장] 버튼도, 닫을 때의 확인도 이 하나를 본다** —
+    /// 두 자리가 다른 기준을 쓰면 저장할 것이 없는데 "저장하지 않고 닫습니다" 를 묻게 된다.
     ///
-    /// **이 앱이 사람을 놓치는 자리가 여기다.** 권한을 다 갖추면 끝난 것처럼 느껴지는데
-    /// [저장] 이 한 걸음 더 남아 있고, 사내에서는 칸이 저절로 차 있어서 끝난 것처럼 보인다.
-    /// 저장할 수 없는 상태(빈 칸)에서는 놓칠 것도 없으므로 묻지 않는다.
-    private var hasUnsavedValues: Bool {
-        draft.hasRequiredValues && savedOfficeDraft != draft
+    /// 둘을 함께 만족해야 한다.
+    ///   - **빈 칸이 없다** — 저장할 수 없는 상태에서는 놓칠 것도 없다
+    ///   - **저장된 값과 다르다** — 방금 저장하고도 버튼이 살아 있으면, 무엇이 남았는지
+    ///     버튼으로는 알 수 없게 된다
+    private var canSave: Bool {
+        draft.hasRequiredValues && (draft.isDirty(comparedTo: savedBaseline) || isServiceChanged)
+    }
+
+    /// 견줄 기준. 원칙은 **설정 파일에 있는 값**이고, 방금 저장한 값은 파일을 다시 읽기
+    /// 전까지의 기준이다 (저장하자마자 버튼이 죽어야 한다).
+    private var savedBaseline: ManualProfileDraft? {
+        justSaved?.draft ?? savedOfficeDraft
+    }
+
+    /// 네트워크 서비스도 저장되는 값이다(`AppConfig.service`). 평소에는 감춰져 있지만
+    /// Wi-Fi 서비스를 못 찾은 기기에서는 이 줄만 고치고 저장하는 일이 실제로 있다.
+    ///
+    /// 저장된 것이 아직 없으면 목록의 기본 선택은 사람이 고른 것이 아니므로 바뀐 것으로 보지 않는다.
+    private var isServiceChanged: Bool {
+        guard let saved = justSaved?.service ?? observation.readyConfig?.service else { return false }
+        return (servicePopUp.titleOfSelectedItem ?? saved) != saved
     }
 
     private func closeWithoutAsking() {
@@ -758,7 +793,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     ///
     /// [취소] 와 저장 직후는 묻지 않는다 — 버리겠다고 누른 사람에게 다시 묻는 것은 방해다.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard hasUnsavedValues, !skipsUnsavedPrompt else { return true }
+        guard canSave, !skipsUnsavedPrompt else { return true }
         confirmClosingWithUnsavedValues()
         return false
     }
@@ -903,6 +938,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         for field in [ssidField, ipField, subnetField, routerField, dnsField] {
             field.delegate = self
         }
+        // 서비스도 저장되는 값이다. 이 줄만 고치고 저장하는 자리가 실제로 있다
+        // (Wi-Fi 서비스를 못 찾은 기기).
+        servicePopUp.target = self
+        servicePopUp.action = #selector(fieldChanged)
 
         let separator = Self.makeSeparator()
         let permissionSeparator = Self.makeSeparator()

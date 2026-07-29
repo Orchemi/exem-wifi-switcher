@@ -32,6 +32,74 @@ struct ProfileDraftTests {
         #expect(draft.hasRequiredValues)
     }
 
+    // MARK: - 바뀐 것이 있는가
+
+    private static let saved = ManualProfileDraft(
+        ip: "192.0.2.10", subnet: "255.255.255.0", router: "192.0.2.1",
+        dns: "192.0.2.53, 192.0.2.54", ssids: "EXAMPLE-AP"
+    )
+
+    @Test("저장된 값 그대로면 바뀐 것이 없다")
+    func notDirtyWhenSameAsSaved() {
+        #expect(!Self.saved.isDirty(comparedTo: Self.saved))
+    }
+
+    /// 표기 차이로 '바뀌었다' 고 하면 버튼이 거짓말을 한다 — 저장할 것이 없는데 눌린다.
+    @Test("공백·구분자 표기 차이는 바뀐 것이 아니다")
+    func ignoresFormattingDifferences() {
+        let retyped = ManualProfileDraft(
+            ip: " 192.0.2.10 ", subnet: "255.255.255.0 ", router: " 192.0.2.1",
+            dns: "192.0.2.53,192.0.2.54", ssids: " EXAMPLE-AP "
+        )
+        #expect(!retyped.isDirty(comparedTo: Self.saved))
+
+        // 줄바꿈·세미콜론으로 적어도 같은 목록이다 (저장할 때 나누는 기준과 같다).
+        let mixed = ManualProfileDraft(
+            ip: "192.0.2.10", subnet: "255.255.255.0", router: "192.0.2.1",
+            dns: "192.0.2.53;\n192.0.2.54", ssids: "EXAMPLE-AP"
+        )
+        #expect(!mixed.isDirty(comparedTo: Self.saved))
+    }
+
+    @Test("한 글자라도 다르면 바뀐 것이다")
+    func dirtyWhenAnyFieldChanges() {
+        for changed in [
+            ManualProfileDraft(ip: "192.0.2.11", subnet: "255.255.255.0", router: "192.0.2.1",
+                               dns: "192.0.2.53, 192.0.2.54", ssids: "EXAMPLE-AP"),
+            ManualProfileDraft(ip: "192.0.2.10", subnet: "255.255.0.0", router: "192.0.2.1",
+                               dns: "192.0.2.53, 192.0.2.54", ssids: "EXAMPLE-AP"),
+            ManualProfileDraft(ip: "192.0.2.10", subnet: "255.255.255.0", router: "192.0.2.2",
+                               dns: "192.0.2.53, 192.0.2.54", ssids: "EXAMPLE-AP"),
+            // DNS 하나를 뺐다 · 순서를 바꿨다 — 둘 다 저장되는 값이 달라진다
+            ManualProfileDraft(ip: "192.0.2.10", subnet: "255.255.255.0", router: "192.0.2.1",
+                               dns: "192.0.2.53", ssids: "EXAMPLE-AP"),
+            ManualProfileDraft(ip: "192.0.2.10", subnet: "255.255.255.0", router: "192.0.2.1",
+                               dns: "192.0.2.54, 192.0.2.53", ssids: "EXAMPLE-AP"),
+            ManualProfileDraft(ip: "192.0.2.10", subnet: "255.255.255.0", router: "192.0.2.1",
+                               dns: "192.0.2.53, 192.0.2.54", ssids: "OTHER-AP"),
+        ] {
+            #expect(changed.isDirty(comparedTo: Self.saved), "바뀐 것을 못 알아봤다: \(changed)")
+        }
+    }
+
+    /// **자동으로 채워진 값은 아직 저장되지 않은 값이다.** 기준을 '창을 열었을 때' 로 잡으면
+    /// 이 순간이 '바뀐 것 없음' 이 되어, 저장을 놓치는 문제가 그대로 되살아난다.
+    @Test("저장된 것이 없으면 자동으로 채워진 값도 바뀐 것이다")
+    func dirtyWhenNothingSavedYet() {
+        #expect(Self.saved.isDirty(comparedTo: nil))
+        // 반대로 아무것도 없는 칸은 바뀐 것이 없다 — 사외에서 빈 창을 열어 둔 상태.
+        #expect(!ManualProfileDraft().isDirty(comparedTo: nil))
+    }
+
+    @Test("고쳤다가 되돌리면 다시 바뀐 것이 없다")
+    func notDirtyAfterUndo() {
+        var edited = Self.saved
+        edited.ip = "192.0.2.99"
+        #expect(edited.isDirty(comparedTo: Self.saved))
+        edited.ip = "192.0.2.10"
+        #expect(!edited.isDirty(comparedTo: Self.saved))
+    }
+
     // MARK: - 빈 칸만 채운다
 
     /// 창을 열어 둔 채 사내 Wi-Fi 에 붙는 순간에 쓰는 규칙이다.
