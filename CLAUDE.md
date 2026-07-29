@@ -52,8 +52,14 @@ docs/                    # 계획 문서
   레포 루트를 기준으로 삼는 코드를 되살리지 마라
 - **`install.sh` · `uninstall.sh` 는 root 로도 실행된다** (앱에서 부르는 길). PATH 를 물려받지 않고,
   `--user` 로 대상 계정을 받으며, root 로 들어오면 자기 자리가 안전한지 먼저 확인한다
-- **코드서명 인증서 없음** (무료 Apple ID) → ad-hoc 서명 + 레거시 launchd. `SMAppService` 사용 불가.
-  공증이 없어 내려받은 앱은 Gatekeeper 에 한 번 막힌다 (README 에 여는 방법을 적어 두었다)
+- **코드서명 인증서 없음** (무료 Apple ID) → ad-hoc 서명. 공증이 없어 내려받은 앱은
+  Gatekeeper 에 한 번 막힌다 (README 에 여는 방법을 적어 두었다)
+- **로그인 항목은 `SMAppService.mainApp` 이다** — ad-hoc 서명으로 동작한다 (2026-07-29 실측).
+  `SMAppService` 가 Developer ID 를 요구한다는 것은 **`.daemon`**(root 데몬) 이야기이고,
+  앱 자신을 올리는 `.mainApp` 에는 해당하지 않는다. **`~/Library/LaunchAgents` 에 plist 를 놓는
+  옛 방식으로 되돌리지 마라** — 그러면 시스템 설정에서 '로그인 시 열기' 가 아니라
+  '백그라운드에서 허용' 에 잡히고, 앱이 상태를 읽을 수 없어 macOS 가 꺼도 체크상자는 켜진 채가 된다
+  (`Sources/WifiSwitcherCore/LoginItem.swift` 머리말에 근거를 적어 두었다)
 - **Xcode 없이 Command Line Tools만으로 빌드 가능해야 한다** — 소스를 읽고 직접 빌드하려는 사람의 진입장벽이다. SPM + 번들 조립 스크립트
 - **`.app` 번들 + `NSLocationWhenInUseUsageDescription` 필수** — 없으면 SSID 조회가 통째로 막힌다 (CoreWLAN만 동작, 위치 권한 필요)
 - **`sudoers` NOPASSWD 설계** — 권한 스크립트는 `root:wheel 0755`, 인자 화이트리스트 검증, 설치 시 `visudo -c` 검증 필수

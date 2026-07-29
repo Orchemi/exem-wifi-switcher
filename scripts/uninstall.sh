@@ -7,7 +7,7 @@
 #   /usr/local/libexec/exem-wifi-switcher/         권한 스크립트 두 개(apply · save-config)와 그 디렉터리
 #   /usr/local/etc/exem-wifi-switcher/             설정 (--keep-config 로 남길 수 있음)
 #   ~/Library/LaunchAgents/com.horbis.exem-wifi-switcher.agent.plist
-#                                                  로그인 항목 (있을 때만)
+#                                                  옛 방식 로그인 항목 (0.1.0 이전 버전에서 켠 경우에만)
 #   ~/Library/Preferences/com.horbis.exem-wifi-switcher.plist
 #                                                  앱이 남긴 설정값(자동 전환 on/off 등)
 #   위치 권한(TCC) 기록                             tccutil reset Location <번들 ID>
@@ -15,6 +15,9 @@
 # 지우지 않는 것 (지울 수 없거나, 사용자 것이라 건드리지 않는다)
 #   EXEM Wifi Switcher.app                         사용자가 둔 자리에 그대로 있다. 직접 지운다
 #   /usr/local/libexec · /usr/local/etc            이 도구가 만들었더라도 다른 도구가 쓸 수 있어 남긴다
+#   지금 방식의 로그인 항목(SMAppService)           파일이 아니라 macOS 가 들고 있는 기록이라
+#                                                  셸에서 끌 공개 수단이 없다. 앱의 체크상자로 끄거나
+#                                                  앱 번들을 지우면 macOS 가 함께 정리한다
 #
 # 마지막에 위 파일들이 정말 사라졌는지 다시 확인하고, 하나라도 남으면 실패로 끝난다.
 # 지우지 않은 것(앱 번들·알림 권한)은 마무리 문구에 그대로 적는다 — "전부 지웠다" 로 뭉뚱그리지 않는다.
@@ -216,7 +219,7 @@ else
     report_target "$CONFIG_DIR" "(설정 — 사용자가 입력한 네트워크 값이 들어 있습니다)"
 fi
 if [ -n "$AGENT_PLIST" ]; then
-    report_target "$AGENT_PLIST" "(로그인 항목)"
+    report_target "$AGENT_PLIST" "(옛 방식 로그인 항목 — 0.1.0 이전 버전에서 켠 경우에만 있습니다)"
 fi
 if [ -n "$PREFERENCES_PLIST" ]; then
     report_target "$PREFERENCES_PLIST" "(앱 설정값 — 자동 전환 on/off 등)"
@@ -292,11 +295,16 @@ if [ -n "$AGENT_PLIST" ] && [ -f "$AGENT_PLIST" ]; then
         # 대상 계정의 GUI 도메인을 지정한다 — root 로 돌 때 id -u 는 0 이라 남의 도메인을 본다.
         launchctl bootout "gui/$TARGET_UID/$AGENT_LABEL" >/dev/null 2>&1 || true
         rm -f "$AGENT_PLIST"
-        printf '    제거했습니다: %s\n' "$AGENT_PLIST"
+        printf '    옛 방식 항목을 제거했습니다: %s\n' "$AGENT_PLIST"
     fi
 else
-    printf '    등록된 항목이 없습니다\n'
+    printf '    옛 방식으로 등록된 항목이 없습니다\n'
 fi
+# 지금 방식(SMAppService)의 로그인 항목은 파일이 아니라 macOS 가 들고 있는 기록이다.
+# 셸에서 끄는 공개 수단이 없으므로, 뭉개지 말고 어떻게 끄는지 그대로 적는다.
+printf '    지금 방식의 로그인 항목은 macOS 가 들고 있어 이 스크립트가 끄지 못합니다\n'
+printf '      · 앱 설정 창의 [로그인 시 자동 실행] 체크상자를 끄거나\n'
+printf '      · 앱 번들(%s.app)을 지우면 macOS 가 함께 정리합니다\n' "$APP_PROCESS_NAME"
 
 # --- 3) sudo 규칙 -----------------------------------------------------------
 
@@ -416,5 +424,6 @@ if [ "$KEEP_CONFIG" -eq 1 ]; then
 fi
 printf '\n아직 남아 있는 것 (직접 정리하세요)\n'
 printf '  - 앱 번들: %s.app — 둔 자리에서 직접 지우세요\n' "$APP_PROCESS_NAME"
+printf '  - 로그인 항목: 앱 설정 창에서 끄거나, 앱 번들을 지우면 함께 사라집니다\n'
 printf '  - 알림 권한: 시스템 설정 > 알림 에서 %s 항목을 지우세요\n' "$APP_PROCESS_NAME"
 printf '    (macOS 는 알림 설정을 명령으로 지울 방법을 제공하지 않습니다)\n'

@@ -145,10 +145,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         observeApplicationActivation()
     }
 
-    /// 시스템 설정에 다녀와 앱으로 돌아오면 권한을 다시 확인한다.
+    /// 시스템 설정에 다녀와 앱으로 돌아오면 권한과 로그인 항목을 다시 확인한다.
     ///
     /// 이것이 없으면 사용자가 권한을 허용하고 돌아와도 창은 "거부됨" 을 계속 보여준다 —
-    /// 고친 사람에게 안 고쳐졌다고 말하는 셈이다.
+    /// 고친 사람에게 안 고쳐졌다고 말하는 셈이다. **로그인 항목도 같은 성질이다** —
+    /// [로그인 항목 열기…] 로 나가서 켜고 돌아오는 길이 있고, 그때 "macOS 가 꺼 두었습니다" 가
+    /// 남아 있으면 방금 켠 사람에게 아직 꺼져 있다고 말하게 된다.
     ///
     /// 이 컨트롤러는 앱이 살아 있는 동안 유지되므로 관찰을 따로 떼지 않는다.
     private func observeApplicationActivation() {
@@ -160,6 +162,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             Task { @MainActor in
                 guard let self, self.window?.isVisible == true else { return }
                 self.refreshPermissions()
+                self.showLoginItemState()
             }
         }
     }
@@ -224,11 +227,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         refreshIntro()
         updateSaveAvailability()
 
-        loginItemCheckbox.state = LoginItem.isRegistered() ? .on : .off
-        // 지난번에 남긴 확인·실패 줄을 물려받지 않는다. 지금 화면은 지금 상태만 말한다.
-        loginItemStatusDismissal?.cancel()
-        loginItemStatusLabel.stringValue = ""
-        loginItemStatusLabel.toolTip = nil
+        showLoginItemState()
 
         // 설치 안내와 '저장할 때 인증을 받는다' 는 이제 아래 권한 섹션이 말한다.
         // 같은 말을 두 자리에서 하면 어느 쪽이 최신인지 알 수 없게 된다.
@@ -612,6 +611,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
         switch result {
         case .success:
+            if operation == .uninstall {
+                // 로그인 항목은 이제 macOS 가 들고 있어 셸 스크립트가 끌 수 없다 (파일이 아니다).
+                // 제거했는데 다음 로그인에 또 뜨는 일이 없도록 **앱이 여기서 끈다.**
+                // 터미널로 제거한 사람을 위한 안내는 uninstall.sh 가 그 자리에서 말한다.
+                try? LoginItem.disable()
+                showLoginItemState()
+            }
             presentInstallerSuccess(operation)
         case .cancelled:
             // 취소는 실패가 아니다. 아무것도 바뀌지 않았다는 사실만 알린다.
@@ -869,16 +875,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     @objc private func toggleLoginItem(_ sender: NSButton) {
         let shouldRegister = sender.state == .on
         do {
-            if shouldRegister {
-                try LoginItem.register(appBundlePath: Bundle.main.bundlePath)
-            } else {
-                try LoginItem.unregister()
-            }
-            // 켠 것은 '됐다' 라서 표시(✓)를 얹고, 끈 것은 성공이라기보다 **상태 변화**라 얹지 않는다.
-            showLoginItemStatus(
-                mark: shouldRegister ? "✓" : nil,
-                shouldRegister ? "로그인 항목에 등록됨" : "로그인 항목에서 제거됨"
-            )
+            if shouldRegister { try LoginItem.enable() } else { try LoginItem.disable() }
         } catch {
             // 조용히 실패해서 켠 줄 알고 있는 것이 최악이다. 체크를 되돌리고 같은 자리에 알린다.
             sender.state = shouldRegister ? .off : .on
@@ -888,6 +885,51 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
                 detail: "\(error)",
                 dismissing: false
             )
+            return
+        }
+
+        // **눌린 대로 됐다고 넘겨짚지 않고 다시 묻는다.** 켰는데 macOS 가 막아 두는 경우가 있고,
+        // 그때 '등록됨' 이라고 말해 버리면 로그인해도 안 뜨는 이유를 영영 알 수 없다.
+        showLoginItemState(after: shouldRegister ? .enabling : .disabling)
+    }
+
+    private enum LoginItemAction { case enabling, disabling }
+
+    /// 시스템에게 상태를 묻고 체크상자와 아래 한 줄을 그린다.
+    ///
+    /// - Parameter action: 방금 사용자가 누른 것. `nil` 이면 창을 여는 길이라 결과 문구를 띄우지 않는다.
+    private func showLoginItemState(after action: LoginItemAction? = nil) {
+        let state = LoginItem.state
+        loginItemCheckbox.state = state.isCheckedInUI ? .on : .off
+        loginItemCheckbox.isEnabled = state.isToggleable
+
+        // 지난번에 남긴 확인·실패 줄을 물려받지 않는다. 지금 화면은 지금 상태만 말한다.
+        loginItemStatusDismissal?.cancel()
+        loginItemStatusLabel.stringValue = ""
+        loginItemStatusLabel.toolTip = nil
+
+        switch state {
+        case .blockedBySystem:
+            // **지우지 않는다.** 이 줄이 사라지면 켜진 체크상자만 남고, 그것이 예전의 그 문제다 —
+            // 앱은 켜졌다고 하는데 로그인하면 안 뜬다.
+            showLoginItemStatus(
+                "macOS 가 이 항목을 꺼 두었습니다 — [로그인 항목 열기…] 에서 켜세요",
+                textColor: .systemOrange,
+                dismissing: false
+            )
+        case .unavailable:
+            showLoginItemStatus(
+                "앱 번들로 실행할 때만 켤 수 있습니다",
+                dismissing: false
+            )
+        case .on where action == .enabling:
+            // 켠 것은 '됐다' 라서 표시(✓)를 얹는다.
+            showLoginItemStatus(mark: "✓", "로그인 항목에 등록됨")
+        case .off where action == .disabling:
+            // 끈 것은 성공이라기보다 **상태 변화**라 표시를 얹지 않는다.
+            showLoginItemStatus("로그인 항목에서 제거됨")
+        case .on, .off:
+            break
         }
     }
 

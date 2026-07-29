@@ -54,8 +54,9 @@
 
 1. `networksetup -setmanual/-setdhcp` 는 **root 권한**이 필요하다.
 2. SSID 조회는 **위치 권한 + `.app` 번들**이 필요하다 (Phase 0에서 실증, 아래 참조).
-3. **코드서명 인증서 없음** (무료 Apple ID). ad-hoc 서명 + 레거시 launchd 경로로 간다.
-   `SMAppService`(Developer ID 요구)는 쓸 수 없다.
+3. **코드서명 인증서 없음** (무료 Apple ID). ad-hoc 서명으로 간다.
+   ~~`SMAppService`(Developer ID 요구)는 쓸 수 없다.~~ → **틀렸다.** `SMAppService.mainApp` 은
+   ad-hoc 서명으로 동작한다 (2026-07-29 실측 ↓). Developer ID 를 요구하는 것은 `.daemon` 쪽이다.
 4. **Xcode 16.4 = macOS 15.5 SDK.** macOS 26 전용 API는 쓸 수 없다.
 
 ### Phase 0 실증 결과 (확정 — 재조사 불필요)
@@ -87,7 +88,7 @@ Phase 0 은 "권한은 번들 ID 단위로 유지된다" 로 적었다. **틀렸
 | 위치 권한 | 코드 해시(ad-hoc 서명) | **풀린다** |
 | 알림 권한 | 번들 식별자 | 남는다 |
 | 전환 권한(`apply`·sudoers)·설정 파일 | 앱 밖 (`/usr/local/…`) | 남는다 |
-| 로그인 항목 | `~/Library/LaunchAgents` 의 경로 | 남는다. 다만 macOS 가 **"백그라운드에서 실행될 수 있습니다"** 알림을 한 번 띄운다 (새 앱이 등록된 것으로 보기 때문) |
+| 로그인 항목 | 번들 식별자 (BTM 기록) | 남는다. ~~macOS 가 "백그라운드에서 실행될 수 있습니다" 알림을 한 번 띄운다~~ → **옛 방식(LaunchAgent) 이야기다.** `SMAppService` 로 옮긴 뒤로는 항목 종류가 `agent` 가 아니라 `app` 이라 그 알림이 뜨지 않는다 (2026-07-29 실측: BTM 이 `disposition=[enabled, allowed, not notified]` 로 기록한다) |
 
 **고칠 수 있는가** — 없다. 서명·공증은 비목표이므로(위 [비목표](#비목표)) 이 성질은 남는다.
 할 수 있는 것은 **놀라지 않게 적어 두는 것**이다: README `업데이트할 때 생기는 일` ·
@@ -390,7 +391,7 @@ sudo를 물어야 해 UX 손해가 크다."
 | `Sources/ExemWifiSwitcherApp/` | 메뉴바 앱. AppKit 글루만 있고 판단은 전부 코어에 있다 |
 | `Sources/WifiSwitcherCore/StatusModel.swift` | 관측값 → 아이콘·머리말·전환 가능 여부. 시스템 호출 없음 |
 | `Sources/WifiSwitcherCore/ProfileDraft.swift` | 온보딩 입력 다듬기·칸별 오류 배정·설정 조립 |
-| `Sources/WifiSwitcherCore/LoginItem.swift` | LaunchAgent plist 생성·등록·해제 (`.app` 번들이 아니면 거부) |
+| `Sources/WifiSwitcherCore/LoginItem.swift` | 로그인 항목 상태·등록·해제. `SMAppService.mainApp` (2026-07-29 이전에는 LaunchAgent plist) |
 
 **Phase 3 가 얹힐 자리**
 
@@ -615,6 +616,8 @@ Phase 2 에서 발견한 문제가 그대로 남아 있다. `NSStatusItem` 이 `
 | 2026-07-29 | **Phase 0 기록 정정 — 재빌드하면 위치 권한이 풀린다** | "재빌드·재서명해도 재승인 불필요" 로 적어 두었는데 실기에서 반대였다. ad-hoc 서명에는 고정된 신원이 없어 TCC 가 **코드 해시**로 앱을 가른다 — 새 빌드는 이름만 같은 다른 앱이다. 같은 뿌리에서 두 번째 일이 따라온다: 로그인 항목을 켜 둔 채 앱을 바꾸면 macOS 가 **"백그라운드에서 실행될 수 있습니다"** 알림을 한 번 띄운다. **둘을 한자리에 적었다**(README `업데이트할 때 생기는 일`) — 따로 적으면 우연히 겹친 일처럼 보이고, 그러면 업데이트한 사람이 앱을 의심한다. 알림 권한(번들 식별자)·전환 권한·설정 값(앱 밖 `/usr/local`)은 그대로 남는다는 것도 함께 적는다. 고칠 수 있는 성질이 아니므로(서명·공증은 비목표) 문서로 막는다 |
 | 2026-07-29 | **자동 전환이 sudoers 규칙을 보지 않던 것** — 전환 권한 판정을 한 자리로 모음 | `AutoSwitchPolicy` 는 `apply` 파일 유무만 봤다. 그런데 전환은 `sudo -n` 으로 도므로 무암호 규칙이 함께 있어야 성립한다 — 규칙만 빠진 상태(macOS 업데이트가 `/etc/sudoers.d/` 를 정리하는 일이 있다)에서 **메뉴는 전환을 잠그는데**(`SetupChecklist` 는 셋을 다 본다) **자동 전환만 시도했다.** 결국 다섯 번 실패 후 중단으로 수렴하지만, 하지 않아도 될 시도 다섯 번과 그만큼의 실패 알림을 치렀다. 백오프·중단은 **모르는 실패**를 위한 장치지 결과가 뻔한 호출을 걸러 내는 자리가 아니다. 판정을 `SwitchingPermission`(apply + sudoers) 한 자리로 모으고 넷이 그것을 본다 — 체크리스트·메뉴의 `canSwitch`·설정 창의 권한 표·자동 전환. 홀드 이름도 뜻을 따라 넓혔다(`helperNotInstalled` → `switchingPermissionMissing`). **`save-config` 는 넣지 않았다** — 없으면 값을 저장할 수 없을 뿐 이미 저장된 설정으로 전환하는 것은 그대로 되고, 메뉴도 그 이유로는 잠그지 않는다. 갈라지지 않게 조합마다 대조한다(`SetupChecklistTests` — 판정을 한쪽만 되돌리면 깨진다). **권한이 없는 동안에는 시도가 없으므로 실패도 쌓이지 않는다** — 다시 설치하면 다음 판정에서 곧바로 되살아난다 |
 | 2026-07-29 | **자동 전환이 켜져 있으면 프로필을 고를 수 없다** — 그리고 그 대가로 '수동 선택 우선' 을 걷어냄 | "자동 전환이 켜져 있으면 저 2개 옵션이 보이되 disabled 처리가 되면 좋겠어"(오너). 자동이 곧 되돌릴 선택을 눌리게 두는 것보다 잠그는 편이 정직하다. **감추지는 않는다** — 체크 표시는 머리말을 지운 뒤로 '지금 무엇이 서 있는가' 를 지고 있는 유일한 자리다. 잠금 사유는 더해진다(권한 없음·전환 중과 함께). 그런데 **켜짐만으로 잠그면 함정이 하나 생긴다** — 위치 권한이 없어 자동 전환이 서지 못하는 상태에서는 토글이 메뉴에 없어서, 프로필까지 잠그면 끄지도 못하고 고르지도 못한다. 그래서 '자동이 손을 쓸 수 있는가' (`MenuLayout.autoSwitchCanAct`) 를 함께 본다. 이 변경으로 **'수동 선택 우선'(`manualChoice`)이 도달 불가**가 되어 걷어냈다 — 부르는 자리가 눌린 메뉴 항목 하나뿐이고, 자동을 켜는 순간 기록이 거둬지며, 판정은 켜져 있을 때만 그 값을 본다. `canSwitch` 의 뜻이 '눌러서 고를 수 있는가' 로 좁아져, '전환 중인가' 를 묻던 자리는 `isSwitching` 을 따로 본다 (묶어 두면 자동 전환이 켜진 정상 상태에서 지워 둔 머리말이 되살아난다) |
+
+| 2026-07-29 | **로그인 항목을 `SMAppService.mainApp` 으로 옮김** — 제약 3 이 틀렸다 | "켰는데 시스템 설정의 '로그인 시 열기' 에 안 보인다"(오너). **켜지긴 했다** — 다만 엉뚱한 목록에 있었다. macOS 는 `~/Library/LaunchAgents` 의 plist 를 `legacy agent` 로 분류해 **아래쪽 '백그라운드에서 허용'** 에 넣고, 사람이 찾는 곳은 **위쪽 '로그인 시 열기'** 다. 실측(BTM 로그): 우리 항목은 `name=EXEM Wifi Switcher, type=legacy agent, disposition=[enabled, allowed]` 로 기록돼 있었다 — 등록은 정상이고 다음 로그인에 뜬다. `launchctl print` 에 없던 것은 **plist 를 오늘 놓았고 그 뒤로 로그인한 적이 없기 때문**이다(launchd 는 로그인할 때 그 디렉터리를 읽는다). ── **그래서 제약 3 을 다시 쟀다.** `SMAppService` 가 Developer ID 를 요구한다는 판단은 **`.daemon`**(root 데몬) 기준이었고, 앱 자신을 올리는 **`.mainApp` 은 ad-hoc 서명으로 그냥 된다.** ad-hoc 번들로 `register()` 하니 `no error` · `status=enabled` 였고 BTM 은 `type=app, disposition=[enabled, allowed, not notified]` 로 기록했다 — **`app` 이라 '로그인 시 열기' 에 뜨고**, `not notified` 라 "백그라운드에서 실행될 수 있습니다" 알림도 없다. 코드 해시가 바뀌는 재빌드에도 등록이 풀리지 않았다(위치 권한과 다르다 — TCC 는 해시로 가르지만 BTM 은 그렇지 않다). ── **얻은 것 하나가 더 있다: 상태를 읽을 수 있다.** 옛 방식은 파일 유무만 알 수 있어 macOS 가 항목을 꺼도 체크상자는 켜진 채였다(README 에 "앱은 그 상태를 읽을 수 없다" 고 적어 두었던 그 자리다). `SMAppService.status` 는 `requiresApproval` 을 돌려주므로 **`blockedBySystem`** 상태를 따로 그린다 — 체크는 켠 채로 두고(사용자가 켠 것은 사실이다) 아래 줄로 "macOS 가 꺼 두었습니다" 를 **지우지 않고** 남긴다. ── **이관**: 옛 plist 가 있으면 앱이 뜰 때 걷어낸다(`migrateLegacyAgent`). 둘 다 두면 로그인할 때 두 벌이 뜬다. 켜 두었던 뜻은 이어받되(`off` 였을 때만 새로 켠다) **macOS 가 꺼 둔 것은 되살리지 않는다.** 번들 밖에서 실행 중(`unavailable`)이면 넘겨받을 수 없으므로 **옛 것도 지우지 않는다** — 지우면 사용자가 켜 둔 자동 실행만 사라진다. ── **대가**: 로그인 항목이 파일이 아니라 macOS 가 든 기록이 되어 **`uninstall.sh` 가 끄지 못한다**(셸용 공개 수단이 없다). 뭉개지 않고 스크립트가 그 자리에서 어떻게 끄는지 적고, 앱의 [제거]는 제거에 성공한 뒤 스스로 끈다. 앱 번들을 지우면 macOS 가 기록도 함께 정리한다(실측 확인) |
 
 ## 참고
 

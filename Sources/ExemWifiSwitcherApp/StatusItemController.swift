@@ -109,8 +109,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             }
         }
 
-        // 앱을 옮겼다면 로그인 항목이 가리키는 경로를 맞춰 둔다 (등록돼 있을 때만 동작한다).
-        LoginItem.reconcile(appBundlePath: Bundle.main.bundlePath)
+        // 옛 방식(~/Library/LaunchAgents)으로 켜 두었던 사람을 새 방식으로 옮긴다.
+        // 둘 다 남겨 두면 로그인할 때 두 벌이 뜬다.
+        LoginItem.migrateLegacyAgent()
+        // 앱을 옮겼다면 로그인 항목이 가리키는 경로를 맞춰 둔다 (켜져 있을 때만 동작한다).
+        LoginItem.reconcile()
 
         // 네트워크 변경 감시가 본선이다.
         let monitor = NetworkChangeMonitor { [weak self] in

@@ -1,47 +1,101 @@
 import Foundation
+import ServiceManagement
 import Testing
 @testable import WifiSwitcherCore
 
-/// 로그인 항목(LaunchAgent) 등록에 쓰는 값.
+/// 로그인 항목.
 ///
-/// 실제 등록은 하지 않는다 — 만들어질 plist 의 내용과, 등록을 거부해야 하는 조건만 본다.
-/// (시스템에 무언가를 남기는 일은 사용자가 직접 한다)
+/// **실제 등록은 하지 않는다.** `SMAppService` 를 부르는 자리(`enable` · `disable` · `reconcile` ·
+/// `migrateLegacyAgent`)는 테스트가 건드리지 않는다 — 테스트가 사용자의 진짜 로그인 항목을
+/// 켜거나 꺼서는 안 된다. 여기서 보는 것은 **판단**(상태 옮기기 · 이관 계획)과,
+/// 옛 방식의 흔적을 임시 홈에서 다루는 길이다.
 @Suite("로그인 항목")
 struct LoginItemTests {
 
-    private func plist(_ contents: String) throws -> [String: Any] {
-        let data = Data(contents.utf8)
-        let object = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
-        return try #require(object as? [String: Any])
+    // MARK: - 상태
+
+    @Test("시스템이 말하는 상태를 앱의 상태로 옮긴다")
+    func mapsSystemStatus() {
+        #expect(LoginItem.state(from: .enabled) == .on)
+        #expect(LoginItem.state(from: .notRegistered) == .off)
+        // 등록은 돼 있는데 macOS 가 꺼 둔 자리. '꺼짐' 과 섞으면 "켰는데 안 뜬다" 를 설명할 수 없다.
+        #expect(LoginItem.state(from: .requiresApproval) == .blockedBySystem)
     }
 
-    @Test("plist 는 앱 번들 안의 실행 파일을 가리킨다")
-    func plistPointsIntoAppBundle() throws {
-        let executable = "/Applications/EXEM Wifi Switcher.app/Contents/MacOS/EXEM Wifi Switcher"
-        let parsed = try plist(LoginItem.plistContents(label: InstallPaths.agentLabel, executablePath: executable))
-
-        #expect(parsed["Label"] as? String == "com.horbis.exem-wifi-switcher.agent")
-        #expect(parsed["ProgramArguments"] as? [String] == [executable])
-        #expect(parsed["RunAtLoad"] as? Bool == true)
-        // 사용자가 앱을 종료했는데 launchd 가 되살리면 "끌 수 없는 앱" 이 된다.
-        #expect(parsed["KeepAlive"] as? Bool == false)
+    @Test("한 번도 켠 적 없는 상태(notFound)는 '꺼짐' 이다 — 켤 수 없음이 아니다")
+    func neverRegisteredIsSimplyOff() {
+        // 재 보니 *한 번도 켠 적 없는 정상 번들*과 *맨 실행 파일*이 똑같이 notFound 를 돌려준다.
+        // 이것을 '켤 수 없음' 으로 읽으면 **새로 받은 사람은 체크상자를 누를 수조차 없다.**
+        #expect(LoginItem.state(from: .notFound) == .off)
+        #expect(LoginItem.State.off.isToggleable)
     }
 
-    @Test("맨 실행 파일은 등록하지 않는다")
-    func refusesBareExecutable() {
-        // Phase 0 에서 맨 실행 파일을 등록했다가 로그인 항목에 실행 파일 이름이 그대로 노출됐다.
-        // 번들이 아니면 애초에 등록하지 않는다.
-        #expect(throws: LoginItem.RegistrationError.notAnAppBundle("/usr/local/bin/exem-wifi-switcher")) {
-            try LoginItem.executablePath(inAppBundle: "/usr/local/bin/exem-wifi-switcher")
+    @Test("켤 수 있는 자리인지는 상태가 아니라 번들이 말한다")
+    func onlyAppBundlesCanRegister() {
+        #expect(LoginItem.canRegister(
+            bundlePath: "/Applications/EXEM Wifi Switcher.app", bundleIdentifier: InstallPaths.bundleIdentifier
+        ))
+        // 끝에 슬래시가 붙어 와도 같은 판단이어야 한다.
+        #expect(LoginItem.canRegister(
+            bundlePath: "/Applications/EXEM Wifi Switcher.app/", bundleIdentifier: InstallPaths.bundleIdentifier
+        ))
+        // 맨 실행 파일. Phase 0 에서 이것을 등록했다가 실행 파일 이름이 그대로 노출됐다.
+        #expect(!LoginItem.canRegister(
+            bundlePath: "/usr/local/bin", bundleIdentifier: InstallPaths.bundleIdentifier
+        ))
+        // 번들 식별자가 없으면 등록할 신원이 없다 (swift run 으로 띄운 개발 빌드).
+        #expect(!LoginItem.canRegister(
+            bundlePath: "/Applications/EXEM Wifi Switcher.app", bundleIdentifier: nil
+        ))
+    }
+
+    @Test("막힌 상태도 체크상자는 켜짐으로 그린다 — 사용자가 켠 것은 사실이다")
+    func blockedStateStillLooksChecked() {
+        #expect(LoginItem.State.on.isCheckedInUI)
+        #expect(LoginItem.State.blockedBySystem.isCheckedInUI)
+        #expect(!LoginItem.State.off.isCheckedInUI)
+        #expect(!LoginItem.State.unavailable.isCheckedInUI)
+    }
+
+    @Test("켤 수 없는 자리에서는 체크상자를 누를 수 없다")
+    func unavailableIsNotToggleable() {
+        #expect(!LoginItem.State.unavailable.isToggleable)
+        for state in [LoginItem.State.on, .off, .blockedBySystem] {
+            #expect(state.isToggleable)
         }
     }
 
-    @Test("앱 번들이면 그 안의 실행 파일 경로를 만든다")
-    func derivesExecutableFromBundle() throws {
-        let path = try LoginItem.executablePath(inAppBundle: "/Applications/EXEM Wifi Switcher.app")
-        #expect(path == "/Applications/EXEM Wifi Switcher.app/Contents/MacOS/EXEM Wifi Switcher")
-        // 끝에 슬래시가 붙어 와도 같은 결과여야 한다.
-        #expect(try LoginItem.executablePath(inAppBundle: "/Applications/EXEM Wifi Switcher.app/") == path)
+    // MARK: - 옛 방식에서 넘어오기
+
+    @Test("옛 흔적이 없으면 아무것도 하지 않는다")
+    func migrationDoesNothingWithoutLegacyAgent() {
+        for state in [LoginItem.State.on, .off, .blockedBySystem, .unavailable] {
+            #expect(LoginItem.migrationPlan(legacyAgentExists: false, state: state) == .nothingToDo)
+        }
+    }
+
+    @Test("옛 방식으로 켜 두었으면 새 방식으로 이어받고 옛 것은 걷어낸다")
+    func migrationCarriesTheSettingOver() {
+        let plan = LoginItem.migrationPlan(legacyAgentExists: true, state: .off)
+        #expect(plan == LoginItem.MigrationPlan(removesLegacyAgent: true, enablesLoginItem: true))
+    }
+
+    @Test("이미 새 방식으로 켜져 있으면 옛 것만 걷어낸다 — 두 번 등록하지 않는다")
+    func migrationDoesNotRegisterTwice() {
+        let plan = LoginItem.migrationPlan(legacyAgentExists: true, state: .on)
+        #expect(plan == LoginItem.MigrationPlan(removesLegacyAgent: true, enablesLoginItem: false))
+    }
+
+    @Test("macOS 가 꺼 둔 것을 앱이 되살리지 않는다")
+    func migrationRespectsSystemDisable() {
+        let plan = LoginItem.migrationPlan(legacyAgentExists: true, state: .blockedBySystem)
+        #expect(plan == LoginItem.MigrationPlan(removesLegacyAgent: true, enablesLoginItem: false))
+    }
+
+    @Test("넘겨받을 수 없는 자리에서는 옛 것도 지우지 않는다")
+    func migrationKeepsLegacyWhenItCannotTakeOver() {
+        // 번들 밖에서 실행 중(개발 빌드)일 때 지워 버리면, 사용자가 켜 둔 자동 실행만 사라진다.
+        #expect(LoginItem.migrationPlan(legacyAgentExists: true, state: .unavailable) == .nothingToDo)
     }
 
     /// 임시 디렉터리를 홈으로 삼는다. 사용자의 진짜 `~/Library/LaunchAgents` 는 건드리지 않는다.
@@ -53,40 +107,39 @@ struct LoginItemTests {
         try body(home.path)
     }
 
-    @Test("등록하면 plist 만 놓는다 — 지금 떠 있는 앱을 한 벌 더 띄우지 않는다")
-    func registerOnlyWritesPlist() throws {
-        // launchctl bootstrap 을 함께 하면 RunAtLoad 때문에 launchd 가 두 번째 인스턴스를 띄운다.
-        // 등록의 목적은 지금 실행이 아니라 다음 로그인이다.
+    private func placeLegacyAgent(in home: String) throws {
+        let path = try LoginItem.legacyPlistPath(homeDirectory: home)
+        try FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: path).deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data("<plist/>".utf8).write(to: URL(fileURLWithPath: path))
+    }
+
+    @Test("옛 항목은 홈 아래 LaunchAgents 의 라벨 이름 파일이다")
+    func legacyPlistPathIsUnderLaunchAgents() throws {
+        let path = try LoginItem.legacyPlistPath(homeDirectory: "/var/empty")
+        #expect(path == "/var/empty/Library/LaunchAgents/com.horbis.exem-wifi-switcher.agent.plist")
+        #expect(LoginItem.legacyPlistFileName == "\(InstallPaths.agentLabel).plist")
+    }
+
+    @Test("옛 흔적을 알아보고 지운다")
+    func detectsAndRemovesLegacyAgent() throws {
         try withTemporaryHome { home in
-            let bundle = "/Applications/EXEM Wifi Switcher.app"
-            #expect(!LoginItem.isRegistered(homeDirectory: home))
+            #expect(!LoginItem.legacyAgentExists(homeDirectory: home))
 
-            try LoginItem.register(appBundlePath: bundle, homeDirectory: home)
+            try placeLegacyAgent(in: home)
+            #expect(LoginItem.legacyAgentExists(homeDirectory: home))
 
-            #expect(LoginItem.isRegistered(homeDirectory: home))
-            #expect(LoginItem.registeredExecutablePath(homeDirectory: home)
-                == "\(bundle)/Contents/MacOS/EXEM Wifi Switcher")
-
-            try LoginItem.unregister(homeDirectory: home)
-            #expect(!LoginItem.isRegistered(homeDirectory: home))
+            try LoginItem.removeLegacyAgent(homeDirectory: home)
+            #expect(!LoginItem.legacyAgentExists(homeDirectory: home))
         }
     }
 
-    @Test("앱을 옮기면 등록된 경로를 따라 고친다")
-    func reconcileFollowsMovedBundle() throws {
+    @Test("지울 옛 흔적이 없어도 실패하지 않는다")
+    func removingAbsentLegacyAgentSucceeds() throws {
         try withTemporaryHome { home in
-            try LoginItem.register(appBundlePath: "/tmp/staging/EXEM Wifi Switcher.app", homeDirectory: home)
-            LoginItem.reconcile(appBundlePath: "/Applications/EXEM Wifi Switcher.app", homeDirectory: home)
-            #expect(LoginItem.registeredExecutablePath(homeDirectory: home)
-                == "/Applications/EXEM Wifi Switcher.app/Contents/MacOS/EXEM Wifi Switcher")
-        }
-    }
-
-    @Test("등록돼 있지 않으면 아무것도 만들지 않는다")
-    func reconcileDoesNothingWhenUnregistered() throws {
-        try withTemporaryHome { home in
-            LoginItem.reconcile(appBundlePath: "/Applications/EXEM Wifi Switcher.app", homeDirectory: home)
-            #expect(!LoginItem.isRegistered(homeDirectory: home))
+            try LoginItem.removeLegacyAgent(homeDirectory: home)
+            #expect(!LoginItem.legacyAgentExists(homeDirectory: home))
         }
     }
 
@@ -99,10 +152,10 @@ struct LoginItemTests {
         #expect(uninstall.contains("BUNDLE_ID=\(InstallPaths.bundleIdentifier)"))
         #expect(uninstall.contains("AGENT_LABEL=\"$BUNDLE_ID.agent\""))
         #expect(InstallPaths.agentLabel == "\(InstallPaths.bundleIdentifier).agent")
+        // 옛 방식으로 켜 두었던 사람의 흔적은 제거 스크립트도 계속 지운다 (앱을 안 열고 지우는 길).
         #expect(uninstall.contains("Library/LaunchAgents/$AGENT_LABEL.plist"))
         // 앱이 남기는 설정값(UserDefaults)도 같은 번들 ID 아래에 쌓인다. 제거 대상에 들어 있어야 한다.
         #expect(uninstall.contains("Library/Preferences/$BUNDLE_ID.plist"))
         #expect(uninstall.contains("tccutil reset Location \"$BUNDLE_ID\""))
-        #expect(LoginItem.plistFileName == "\(InstallPaths.agentLabel).plist")
     }
 }
