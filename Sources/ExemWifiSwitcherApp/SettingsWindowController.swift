@@ -71,6 +71,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private let saveButton = NSButton(title: "저장", target: nil, action: nil)
 
     private let loginItemCheckbox = NSButton(checkboxWithTitle: "로그인 시 자동 실행", target: nil, action: nil)
+    /// 체크상자를 누른 결과. **자리는 늘 잡혀 있고 글자만 들고 난다** (`showLoginItemStatus`).
+    private let loginItemStatusLabel = SettingsWindowController.makeWrappingLabel(
+        font: .systemFont(ofSize: NSFont.smallSystemFontSize),
+        color: .secondaryLabelColor
+    )
+    /// 잠깐 띄운 글자를 지울 일. 다시 누르면 앞의 것을 걷어낸다 — 남아 있으면 새로 띄운 글자를 지운다.
+    private var loginItemStatusDismissal: Task<Void, Never>?
     /// 로그인 항목 화면으로 가는 손잡이. macOS 가 이 항목을 껐는지 확인하고 되돌릴 수 있는 유일한 자리다.
     private let loginItemSettingsButton = NSButton(title: "로그인 항목 열기…", target: nil, action: nil)
     private let noticeLabel = SettingsWindowController.makeWrappingLabel(
@@ -218,6 +225,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         updateSaveAvailability()
 
         loginItemCheckbox.state = LoginItem.isRegistered() ? .on : .off
+        // 지난번에 남긴 확인·실패 줄을 물려받지 않는다. 지금 화면은 지금 상태만 말한다.
+        loginItemStatusDismissal?.cancel()
+        loginItemStatusLabel.stringValue = ""
+        loginItemStatusLabel.toolTip = nil
 
         // 설치 안내와 '저장할 때 인증을 받는다' 는 이제 아래 권한 섹션이 말한다.
         // 같은 말을 두 자리에서 하면 어느 쪽이 최신인지 알 수 없게 된다.
@@ -852,6 +863,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     // MARK: - 로그인 항목
 
+    /// 이 체크상자는 **누르는 즉시 반영된다** — 아래 [저장] 과 아무 상관이 없다.
+    /// 그런데 그 사실이 화면에 없어서, 옆의 [저장] 이 비활성인 것을 보고
+    /// "이건 저장 안 해도 되나" 로 읽혔다. 그래서 눌린 결과를 그 자리에서 말한다.
     @objc private func toggleLoginItem(_ sender: NSButton) {
         let shouldRegister = sender.state == .on
         do {
@@ -860,14 +874,64 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             } else {
                 try LoginItem.unregister()
             }
+            // 켠 것은 '됐다' 라서 표시(✓)를 얹고, 끈 것은 성공이라기보다 **상태 변화**라 얹지 않는다.
+            showLoginItemStatus(
+                mark: shouldRegister ? "✓" : nil,
+                shouldRegister ? "로그인 항목에 등록됨" : "로그인 항목에서 제거됨"
+            )
         } catch {
+            // 조용히 실패해서 켠 줄 알고 있는 것이 최악이다. 체크를 되돌리고 같은 자리에 알린다.
             sender.state = shouldRegister ? .off : .on
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = shouldRegister ? "로그인 항목으로 등록하지 못했습니다" : "로그인 항목을 해제하지 못했습니다"
-            alert.informativeText = "\(error)"
-            alert.addButton(withTitle: "확인")
-            alert.beginSheetModal(for: window!, completionHandler: nil)
+            showLoginItemStatus(
+                shouldRegister ? "등록하지 못했습니다" : "해제하지 못했습니다",
+                textColor: .systemRed,
+                detail: "\(error)",
+                dismissing: false
+            )
+        }
+    }
+
+    /// 체크상자 아래 한 줄. **자리는 늘 잡아 두고 글자만 나타났다 사라진다** —
+    /// 줄이 생겼다 없어지면 창 높이가 그때마다 출렁인다 (이 창이 오류 줄을 다루는 방식과 같다).
+    ///
+    /// **색은 표시(✓) 하나에만 얹는다.** 글자까지 물들이면 3초 뜨는 줄이 화면에서 가장 센 것이
+    /// 된다. 초록을 흐리게 하는 길도 재 봤는데 **밝은 화면에서 읽기 어려워졌다** — 초록은
+    /// 흰 바탕에서 이미 옅다. 그래서 양을 줄인다.
+    ///
+    /// - Parameters:
+    ///   - detail: 한 줄에 담을 수 없는 사유. 툴팁으로 남긴다 — 짧은 말이 먼저고, 원문은 물어보면 나온다.
+    ///   - dismissing: 잠깐 보였다 사라질 것인가. **실패는 지우지 않는다** — 못 봤는데 사라지면
+    ///     켠 줄 알고 넘어간다. 다음에 다시 누를 때 새 결과가 덮는다.
+    private func showLoginItemStatus(
+        mark: String? = nil,
+        _ text: String,
+        textColor: NSColor = .secondaryLabelColor,
+        detail: String? = nil,
+        dismissing: Bool = true
+    ) {
+        // 연달아 누르면 앞의 타이머가 남아 방금 띄운 글자를 지운다. 먼저 걷어낸다.
+        loginItemStatusDismissal?.cancel()
+
+        let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        let line = NSMutableAttributedString()
+        if let mark {
+            line.append(NSAttributedString(
+                string: mark + " ",
+                attributes: [.font: font, .foregroundColor: NSColor.systemGreen]
+            ))
+        }
+        line.append(NSAttributedString(
+            string: text, attributes: [.font: font, .foregroundColor: textColor]
+        ))
+        loginItemStatusLabel.attributedStringValue = line
+        loginItemStatusLabel.toolTip = detail
+
+        guard dismissing else { return }
+        loginItemStatusDismissal = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.loginItemStatusLabel.stringValue = ""
+            self.loginItemStatusLabel.toolTip = nil
         }
     }
 
@@ -1006,7 +1070,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         let stack = NSStackView(views: [
             introLabel, grid,
             separator, permissionHeader, permissionGrid,
-            permissionSeparator, loginItemRow, noticeLabel, buttonRow,
+            permissionSeparator, loginItemRow, loginItemStatusLabel, noticeLabel, buttonRow,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -1014,7 +1078,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         stack.setCustomSpacing(10, after: separator)
         stack.setCustomSpacing(10, after: permissionHeader)
         stack.setCustomSpacing(10, after: permissionSeparator)
-        stack.setCustomSpacing(6, after: loginItemRow)
+        // 체크상자와 그 결과 줄은 한 덩이로 읽혀야 한다 — 사이를 좁히고, 다음 것과는 원래 간격을 둔다.
+        stack.setCustomSpacing(4, after: loginItemRow)
+        stack.setCustomSpacing(6, after: loginItemStatusLabel)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         let content = NSView()
@@ -1031,6 +1097,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             permissionSeparator.widthAnchor.constraint(equalTo: stack.widthAnchor),
             introLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             noticeLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            // 글자가 없을 때도 폭을 붙들어 둔다 — 나타났다 사라질 때 옆 것이 밀리지 않게.
+            loginItemStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             buttonRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             permissionHeader.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
