@@ -330,6 +330,64 @@ struct SetupChecklistTests {
         #expect(outsideWithoutPermissions.detail == nil)
     }
 
+    // MARK: - 자동 전환과 같은 답을 낸다
+
+    /// **전환 권한 판정을 나눠 쓰는 자리가 셋이다** — 초기 설정 체크리스트(메뉴 머리말) ·
+    /// 메뉴의 전환 가능 여부(`canSwitch`) · 자동 전환(`AutoSwitchPolicy`).
+    ///
+    /// 예전에는 자동 전환만 `apply` 파일 하나를 보고 있었다. 그래서 무암호 규칙만 빠진 상태에서
+    /// **메뉴는 전환을 잠그는데 자동 전환은 시도했다** — `sudo -n` 이 거부하고, 실패·백오프가
+    /// 다섯 번 쌓인 뒤에야 멈췄다. 하지 않아도 될 시도였다.
+    ///
+    /// 지금은 셋이 같은 판정(`SwitchingPermission`)을 쓴다. 여기서 조합마다 대조해 다시 갈라지지 않게 한다.
+    @Test("전환 권한 판정이 메뉴와 자동 전환에서 갈리지 않는다")
+    func switchingPermissionAgreesWithAutoSwitch() {
+        for apply in [true, false] {
+            for sudoers in [true, false] {
+                // **설정 저장 권한은 전환의 조건이 아니다.** `save-config` 가 없으면 값을 저장할 수
+                // 없을 뿐, 이미 저장된 설정으로 전환하는 것은 그대로 된다. 이 축을 함께 돌려
+                // 저장 권한이 전환 판정에 새어 들어오지 않는 것도 확인한다.
+                for saveConfig in [true, false] {
+                    let model = StatusModel.resolve(input(
+                        helperInstalled: apply,
+                        sudoersInstalled: sudoers,
+                        saveConfigInstalled: saveConfig,
+                        // 사외(DHCP) 구성 — 자동 전환이 사내 프로필로 옮길 이유가 있는 상태다.
+                        // 이미 목표와 같으면 권한과 무관하게 아무것도 하지 않으므로 대조가 되지 않는다.
+                        interface: SetupChecklistTests.outsideInfo
+                    ))
+
+                    var state = AutoSwitchState()
+                    state.adopt(ssid: "OFFICE-WIFI")
+                    let decision = AutoSwitchPolicy.decide(
+                        AutoSwitchContext(
+                            isEnabled: true,
+                            config: .ready(SetupChecklistTests.config),
+                            switching: SwitchingPermission(applyInstalled: apply, sudoersInstalled: sudoers),
+                            ssid: .connected("OFFICE-WIFI"),
+                            interface: SetupChecklistTests.outsideInfo,
+                            dns: .unreadable("이 대조에서는 DNS 를 보지 않습니다"),
+                            isBusy: false
+                        ),
+                        state: state,
+                        now: Date(timeIntervalSince1970: 1_800_000_000)
+                    )
+                    let heldByPermission = decision.hold == .switchingPermissionMissing
+
+                    #expect(
+                        model.setupGaps.contains(.switchingPermission) == heldByPermission,
+                        "체크리스트와 자동 전환의 판정이 갈렸다 (apply: \(apply), sudoers: \(sudoers))"
+                    )
+                    #expect(
+                        model.canSwitch == !heldByPermission,
+                        Comment(rawValue: "메뉴가 잠그는 조건과 자동 전환이 멈추는 조건이 갈렸다 "
+                            + "(apply: \(apply), sudoers: \(sudoers), saveConfig: \(saveConfig))")
+                    )
+                }
+            }
+        }
+    }
+
     // MARK: - 설정 창과 같은 답을 낸다
 
     /// 메뉴와 설정 창이 같은 시스템을 두고 다른 답을 내면 어느 쪽을 믿어야 할지 알 수 없다.

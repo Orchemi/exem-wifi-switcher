@@ -49,7 +49,7 @@ struct AutoSwitchPolicyTests {
     private func context(
         enabled: Bool = true,
         config: ConfigStatus = .ready(AutoSwitchPolicyTests.config),
-        helperInstalled: Bool = true,
+        switching: SwitchingPermission = .satisfied,
         ssid: SSIDReading = .connected("OFFICE-WIFI"),
         interface: InterfaceInfo? = AutoSwitchPolicyTests.dhcpInfo,
         dns: DNSReading = AutoSwitchPolicyTests.dnsNotInScope,
@@ -58,7 +58,7 @@ struct AutoSwitchPolicyTests {
         AutoSwitchContext(
             isEnabled: enabled,
             config: config,
-            helperInstalled: helperInstalled,
+            switching: switching,
             ssid: ssid,
             interface: interface,
             dns: dns,
@@ -152,9 +152,46 @@ struct AutoSwitchPolicyTests {
         #expect(decide(context(config: .pristineExample(path: "/tmp/x.json")), AutoSwitchState()) == .hold(.configUnavailable))
     }
 
-    @Test("권한 스크립트가 없으면 시도하지 않는다 — 실패가 뻔한 호출을 반복하지 않는다")
-    func holdsWithoutHelper() {
-        #expect(decide(context(helperInstalled: false), AutoSwitchState()) == .hold(.helperNotInstalled))
+    // MARK: - 전환 권한
+    //
+    // **2026-07-29 판정의 뜻이 바뀌었다.** 전에는 `apply` 파일이 놓여 있으면 시도했다.
+    // 그런데 전환은 무암호 sudoers 규칙이 함께 있어야 성립한다 — 규칙만 빠진 상태에서는
+    // (macOS 업데이트가 `/etc/sudoers.d/` 를 정리하는 일이 있다) `sudo -n` 이 그 자리에서 거부한다.
+    // 예전 정책은 그 뻔한 실패를 다섯 번 쌓은 뒤에야 멈췄고, 그동안 실패 알림이 뜨고 메뉴에 실패가 남았다.
+    // 메뉴는 같은 상태에서 이미 전환을 잠그고 있었으므로(`SetupChecklist.switchingPermission`)
+    // 자동 전환만 혼자 시도하고 있던 셈이다. **두 자리가 같은 판정을 쓰게 했다** (`SwitchingPermission`).
+
+    @Test("전환 권한이 갖춰지지 않았으면 시도하지 않는다 — 실패가 뻔한 호출을 반복하지 않는다")
+    func holdsWithoutSwitchingPermission() {
+        // 스크립트가 없다.
+        #expect(decide(context(switching: SwitchingPermission(applyInstalled: false, sudoersInstalled: true)),
+                       AutoSwitchState()) == .hold(.switchingPermissionMissing))
+        // 스크립트는 있는데 무암호 규칙이 없다 — 겉보기에는 설치된 상태다. 여기가 예전에 뚫려 있었다.
+        #expect(decide(context(switching: SwitchingPermission(applyInstalled: true, sudoersInstalled: false)),
+                       AutoSwitchState()) == .hold(.switchingPermissionMissing))
+        #expect(decide(context(switching: SwitchingPermission(applyInstalled: false, sudoersInstalled: false)),
+                       AutoSwitchState()) == .hold(.switchingPermissionMissing))
+    }
+
+    @Test("권한이 없는 동안에는 아무것도 쌓이지 않고, 복구되면 곧바로 다시 시도한다")
+    func resumesWhenSwitchingPermissionIsRestored() {
+        var state = AutoSwitchState()
+        state.adopt(ssid: "OFFICE-WIFI")
+        let ruleMissing = context(switching: SwitchingPermission(applyInstalled: true, sudoersInstalled: false))
+
+        // 판정이 몇 번을 오가도 시도가 없다. 시도가 없으므로 기록도 없다
+        // (기록은 실제로 적용을 시작하는 자리에서만 남는다 — `StatusItemController.apply`).
+        var now = Self.t0
+        for _ in 0..<10 {
+            #expect(AutoSwitchPolicy.decide(ruleMissing, state: state, now: now)
+                == .hold(.switchingPermissionMissing))
+            now = now.addingTimeInterval(60)
+        }
+        #expect(state.consecutiveFailures == 0)
+
+        // 사용자가 설정 창에서 [설치] 를 다시 눌렀다. **중단 상태로 굳어 있으면 안 된다** —
+        // 다음 판정에서 바로 되살아나야 한다 (관측값은 갱신 때마다 다시 읽힌다).
+        #expect(AutoSwitchPolicy.decide(context(), state: state, now: now) == .apply(profile: "office"))
     }
 
     @Test("걸리는 프로필도 기본 프로필도 없으면 멈춘다")

@@ -93,7 +93,8 @@ public enum SetupChecklist {
         var gaps: [SetupGap] = []
 
         // 스크립트만 있고 무암호 규칙이 없으면 겉보기에는 설치된 상태다 — 전환할 때마다 암호를 물어 실패한다.
-        if !(input.helperInstalled && input.sudoersInstalled) {
+        // **자동 전환도 같은 판정을 본다** (`SwitchingPermission`) — 한쪽만 시도하고 실패를 쌓지 않게.
+        if !input.switching.isSatisfied {
             gaps.append(.switchingPermission)
         }
         if !input.saveConfigInstalled {

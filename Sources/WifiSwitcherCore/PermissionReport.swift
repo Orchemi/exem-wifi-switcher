@@ -276,6 +276,11 @@ public struct PermissionInput: Equatable, Sendable {
         self.wifiNameVisible = wifiNameVisible
         self.notifications = notifications
     }
+
+    /// 전환 권한 판정. 메뉴·체크리스트·자동 전환과 **같은 값을 본다** (`SwitchingPermission`).
+    public var switching: SwitchingPermission {
+        SwitchingPermission(applyInstalled: applyInstalled, sudoersInstalled: sudoersInstalled)
+    }
 }
 
 /// 권한 점검 결과 전부.
@@ -335,6 +340,17 @@ public struct PermissionReport: Equatable, Sendable {
     // MARK: - 전환 권한
 
     private static func switching(_ input: PermissionInput) -> PermissionItem {
+        // **갖춰졌는가는 공용 판정이 답한다** (`SwitchingPermission`). 이 화면이 따로 세지 않는다 —
+        // 아래 두 갈래는 '무엇이 빠졌는지' 를 말하기 위한 것이지 판정이 아니다.
+        guard !input.switching.isSatisfied else {
+            return PermissionItem(
+                subject: .switching,
+                state: .satisfied,
+                status: "설치됨",
+                advice: nil,
+                remedy: .none
+            )
+        }
         let install = installRemedy(input)
         guard input.applyInstalled else {
             return PermissionItem(
@@ -345,25 +361,17 @@ public struct PermissionReport: Equatable, Sendable {
                 remedy: install.remedy
             )
         }
-        // 스크립트만 있고 규칙이 없으면 겉보기에는 설치된 상태다. 전환할 때마다 암호를 물어 실패한다.
-        // 이쪽은 **상태만 봐서는 알 수 없는 사실**이라 한 줄을 남긴다 (설치 절차가 아니라 증상이다).
-        guard input.sudoersInstalled else {
-            return PermissionItem(
-                subject: .switching,
-                state: .actionNeeded,
-                status: "무암호 규칙 없음",
-                advice: [install.advice, "전환 때마다 암호 요구 · 다시 설치하면 해결"]
-                    .compactMap { $0 }.joined(separator: " · "),
-                details: "전환 스크립트는 있지만 무암호 규칙이 없어 전환할 때마다 암호를 물어 실패합니다.",
-                remedy: install.remedy
-            )
-        }
+        // 남은 경우는 하나다 — 스크립트는 있고 규칙만 없다. 겉보기에는 설치된 상태이고,
+        // 전환할 때마다 암호를 물어 실패한다. **상태만 봐서는 알 수 없는 사실**이라 한 줄을 남긴다
+        // (설치 절차가 아니라 증상이다).
         return PermissionItem(
             subject: .switching,
-            state: .satisfied,
-            status: "설치됨",
-            advice: nil,
-            remedy: .none
+            state: .actionNeeded,
+            status: "무암호 규칙 없음",
+            advice: [install.advice, "전환 때마다 암호 요구 · 다시 설치하면 해결"]
+                .compactMap { $0 }.joined(separator: " · "),
+            details: "전환 스크립트는 있지만 무암호 규칙이 없어 전환할 때마다 암호를 물어 실패합니다.",
+            remedy: install.remedy
         )
     }
 

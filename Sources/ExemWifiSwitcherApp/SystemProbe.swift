@@ -58,15 +58,23 @@ struct Observation: Sendable {
         )
     }
 
+    /// 전환 권한 판정. 메뉴가 전환을 잠그는 기준과 **같은 값**이다 (`SwitchingPermission`).
+    var switching: SwitchingPermission {
+        SwitchingPermission(applyInstalled: helperInstalled, sudoersInstalled: sudoersInstalled)
+    }
+
     /// 자동 전환 판정에 넘길 관측값.
     ///
     /// **DNS 도 함께 넘긴다.** IP·서브넷·라우터만으로 "이미 적용됨" 을 판정하면 사내 DNS 가
     /// 남은 채 밖에서 도는 구성을 정상으로 본다.
+    ///
+    /// **전환 권한도 스크립트 유무가 아니라 판정으로 넘긴다.** 무암호 규칙이 빠진 상태에서
+    /// 시도하면 `sudo -n` 이 그 자리에서 거부한다 — 실패를 쌓을 이유가 없다.
     func autoSwitchContext(isEnabled: Bool, isBusy: Bool) -> AutoSwitchContext {
         AutoSwitchContext(
             isEnabled: isEnabled,
             config: config,
-            helperInstalled: helperInstalled,
+            switching: switching,
             ssid: ssid,
             interface: interface,
             dns: dnsServers,

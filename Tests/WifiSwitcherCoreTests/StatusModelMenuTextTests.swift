@@ -40,7 +40,7 @@ struct StatusModelMenuTextTests {
         let holds: [AutoSwitchHold?] = [
             nil, .disabled, .busy, .locationPermissionRequired, .locationPermissionDenied,
             .wifiOff, .notAssociated, .ssidUnavailable("인터페이스를 찾지 못했습니다"),
-            .configUnavailable, .helperNotInstalled, .noMatchingProfile(ssid: "OTHER-WIFI"),
+            .configUnavailable, .switchingPermissionMissing, .noMatchingProfile(ssid: "OTHER-WIFI"),
             .alreadyApplied(profile: "office"), .manualOverride(profile: "auto"),
             .settling(profile: "office"), .ineffective(profile: "office"),
             .backoff(profile: "office", retryAt: Date(timeIntervalSince1970: 1_800_000_000)),
@@ -219,7 +219,7 @@ struct StatusModelMenuTextTests {
         let noHelper = StatusModel.resolve(StatusInput(
             config: .ready(Self.config), interface: Self.officeInfo, helperInstalled: false,
             autoSwitchEnabled: true, ssid: .connected("OFFICE-WIFI"),
-            autoSwitchHold: .helperNotInstalled
+            autoSwitchHold: .switchingPermissionMissing
         ))
         #expect(noHelper.detail == "전환 권한 미설치")
         #expect(noHelper.autoSwitchNotes.isEmpty)
@@ -297,7 +297,7 @@ struct StatusModelMenuTextTests {
         // 메뉴는 머리말·액션이 대신 말하므로 note 를 비우지만, `--diagnose` 에는 이유가 있어야 한다.
         let profiles = Self.config.profiles
         for hold in [
-            AutoSwitchHold.configUnavailable, .helperNotInstalled,
+            AutoSwitchHold.configUnavailable, .switchingPermissionMissing,
             .locationPermissionDenied, .locationPermissionRequired,
         ] {
             let reason = StatusModel.autoSwitchReason(hold, ssid: .connected("OFFICE-WIFI"), profiles: profiles)

@@ -6,8 +6,12 @@ public struct AutoSwitchContext: Equatable, Sendable {
     /// 사용자가 자동 전환을 켜 두었는가.
     public var isEnabled: Bool
     public var config: ConfigStatus
-    /// 권한 스크립트(`apply`)가 설치돼 있는가.
-    public var helperInstalled: Bool
+    /// 전환 권한이 갖춰져 있는가 (`apply` 스크립트 + 무암호 sudoers 규칙).
+    ///
+    /// **파일 하나가 아니라 판정을 받는다.** 예전에는 `apply` 유무만 보고 규칙이 빠진 상태에서도
+    /// 시도했는데, 그때 메뉴는 이미 전환을 잠그고 있었다 — 두 자리가 갈라져 있었다
+    /// (`SwitchingPermission` 주석).
+    public var switching: SwitchingPermission
     public var ssid: SSIDReading
     /// 지금의 IPv4 구성. 읽지 못했으면 nil.
     public var interface: InterfaceInfo?
@@ -21,7 +25,7 @@ public struct AutoSwitchContext: Equatable, Sendable {
     public init(
         isEnabled: Bool,
         config: ConfigStatus,
-        helperInstalled: Bool,
+        switching: SwitchingPermission,
         ssid: SSIDReading,
         interface: InterfaceInfo?,
         dns: DNSReading,
@@ -29,7 +33,7 @@ public struct AutoSwitchContext: Equatable, Sendable {
     ) {
         self.isEnabled = isEnabled
         self.config = config
-        self.helperInstalled = helperInstalled
+        self.switching = switching
         self.ssid = ssid
         self.interface = interface
         self.dns = dns
@@ -54,7 +58,11 @@ public enum AutoSwitchHold: Equatable, Sendable {
     case ssidUnavailable(String)
     /// 설정이 없거나 쓸 수 없다
     case configUnavailable
-    case helperNotInstalled
+    /// 전환 권한이 갖춰지지 않았다 — `apply` 스크립트나 무암호 규칙이 빠져 전환 자체가 되지 않는다.
+    ///
+    /// 예전 이름은 `helperNotInstalled` 였고 뜻도 좁았다(스크립트 파일 하나). 규칙이 빠진 상태를
+    /// 세지 않아 자동 전환이 실패를 다섯 번 쌓았다 — 이름과 뜻을 함께 넓혔다 (2026-07-29).
+    case switchingPermissionMissing
     /// 걸리는 프로필도 기본 프로필도 없다
     case noMatchingProfile(ssid: String)
     /// 이미 목표 구성이다 — 평소 상태
@@ -229,8 +237,13 @@ public enum AutoSwitchPolicy {
         guard !context.isBusy else { return .hold(.busy) }
 
         // 1) 전환할 대상 자체가 준비돼 있는가
+        //
+        //    **권한은 스크립트 파일 하나가 아니라 판정으로 본다** (`SwitchingPermission`).
+        //    무암호 규칙이 빠진 상태에서 거는 전환은 `sudo -n` 이 그 자리에서 거부한다 —
+        //    결과가 뻔한 시도를 백오프·중단 장치로 다섯 번 걸러 내는 것은 그 장치를 쓸 자리가 아니다.
+        //    메뉴가 전환을 잠그는 조건과 여기가 멈추는 조건이 같아야 한다 (`SetupChecklistTests` 가 대조한다).
         guard case .ready(let config) = context.config else { return .hold(.configUnavailable) }
-        guard context.helperInstalled else { return .hold(.helperNotInstalled) }
+        guard context.switching.isSatisfied else { return .hold(.switchingPermissionMissing) }
 
         // 2) 어디에 있는지 알아야 판단할 수 있다. 모르면 **아무것도 바꾸지 않는다.**
         let ssid: String

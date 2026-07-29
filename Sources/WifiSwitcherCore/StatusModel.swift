@@ -76,6 +76,11 @@ public struct StatusInput: Equatable, Sendable {
         self.autoSwitchHold = autoSwitchHold
         self.notifications = notifications
     }
+
+    /// 전환 권한 판정. **메뉴·체크리스트·자동 전환이 같은 값을 본다** (`SwitchingPermission`).
+    public var switching: SwitchingPermission {
+        SwitchingPermission(applyInstalled: helperInstalled, sudoersInstalled: sudoersInstalled)
+    }
 }
 
 /// 메뉴바가 그릴 것 전부. 여기까지 오면 AppKit 쪽에는 판단이 남아 있지 않다.
@@ -244,7 +249,7 @@ public struct StatusModel: Equatable, Sendable {
             //
             // 전환은 **눌러서 될 때만** 열어 둔다. 권한이 빠진 채로 열어 두면 누를 때마다 실패한다.
             // 반대로 Wi-Fi 이름만 없는 상태는 수동 전환에 아무 문제가 없다 — 그대로 열어 둔다.
-            let canSwitch = !profiles.isEmpty && input.helperInstalled && input.sudoersInstalled
+            let canSwitch = !profiles.isEmpty && input.switching.isSatisfied
             return StatusModel(
                 icon: .error,
                 headline: "초기 설정하기",
@@ -313,7 +318,7 @@ public struct StatusModel: Equatable, Sendable {
 
         var notes: [String] = []
         switch input.autoSwitchHold {
-        case .configUnavailable?, .helperNotInstalled?:
+        case .configUnavailable?, .switchingPermissionMissing?:
             break  // 머리말과 그 보조 줄이 이미 말했다
         case .none, .busy?, .alreadyApplied?, .settling?:
             // 멈춘 것이 없는 평소 상태. 이름을 **읽고 있으면** 적을 것이 없다.
@@ -361,7 +366,7 @@ public struct StatusModel: Equatable, Sendable {
             return "Wi-Fi 이름 읽기 실패"
         case .configUnavailable?:
             return "설정 필요"
-        case .helperNotInstalled?:
+        case .switchingPermissionMissing?:
             return "전환 권한 미설치"
         case .noMatchingProfile?:
             return "일치하는 프로필 없음"
