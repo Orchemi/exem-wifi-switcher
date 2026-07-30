@@ -96,7 +96,10 @@ public struct StatusItemSeatState: Equatable, Sendable {
     ///
     /// **macOS 는 사용자가 ⌘-드래그로 옮겼을 때만 이 값을 적는다** (2026-07-30 실측: 상태 항목을
     /// 여러 번 띄웠다 내려도 값이 생기지 않았고, 앱이 심어 둔 값도 그대로 남았다).
-    /// 그래서 앱이 심은 값과 다르면 **사용자가 손수 옮긴 것**이다.
+    /// 그래서 앱이 심은 값과 다르면 그 값을 적은 것은 사용자다.
+    ///
+    /// 다만 **값을 적은 것과 자리를 고른 것은 다르다** — 가려진 자리는 볼 수 없으니 고를 수도 없다.
+    /// 그 판정은 `isUserPlaced(isHidden:)` 이 한다.
     public var stored: Double?
 
     /// 앱이 마지막으로 심은 값. 심은 적이 없으면 `nil`.
@@ -111,10 +114,29 @@ public struct StatusItemSeatState: Equatable, Sendable {
         self.nudges = nudges
     }
 
-    /// 사용자가 손수 옮겨 둔 자리인가. **그렇다면 앱은 손대지 않는다.**
-    public var isUserPlaced: Bool {
+    /// 저장된 자리를 **앱이 적었는가.** 앱이 심었거나 밀어 둔 값이면 참이다.
+    public var isAppPlaced: Bool {
         guard let stored else { return false }
-        return stored != appliedByApp
+        return stored == appliedByApp
+    }
+
+    /// 사용자가 **보고 고른 자리**인가. **그렇다면 앱은 손대지 않는다.**
+    ///
+    /// 두 가지가 함께 성립해야 한다.
+    ///   - **앱이 적은 값이 아니다** — macOS 는 ⌘-드래그 때만 이 값을 적으므로, 앱이 적은 것이
+    ///     아니라면 적은 것은 사용자뿐이다
+    ///   - **그 자리가 보인다** — 안 보이는 아이콘을 겨냥해 끌 수는 없다. 가려진 것으로 **측정된**
+    ///     자리는 사용자가 그 자리를 골랐다는 증거가 되지 못한다
+    ///
+    /// 두 번째 조건이 없으면 오너가 겪은 자리에서 앱이 손을 뗀다 (2026-07-30 실측: 오너 도메인에
+    /// 637 이 적혀 있었고, 그 값이 놓이는 자리는 803~837 로 노치 663~848 **안**이었다. 오너는 그
+    /// 자리를 본 적이 없는데도 앱은 "사용자가 고른 자리" 로 읽고 알림만 한 번 더 했다).
+    ///
+    /// - Parameter isHidden: 방금 잰 그 자리의 상태. **재지 못했으면 `nil`** — 그때는 사용자 자리로
+    ///   둔다. 재지 못한 것을 가려졌다고 부르면 멀쩡히 보이는 자리를 빼앗는다.
+    public func isUserPlaced(isHidden: Bool?) -> Bool {
+        guard stored != nil, !isAppPlaced else { return false }
+        return isHidden != true
     }
 }
 
@@ -203,6 +225,12 @@ public enum StatusItemSeat {
     ///     빼앗는 것이고, 이 앱이 가장 경계하는 실패다
     ///   - **노치가 없다** — 피할 것이 없는데 자리를 정해 두면, 그 화면에서 자연스럽게 놓였을 자리를
     ///     이유 없이 옮기는 셈이 된다. 노치 없는 기계·외부 모니터에서는 아무것도 하지 않는다
+    ///
+    /// **저장된 자리가 가려지는 경우도 여기서는 손대지 않는다.** 자리를 심는 것은 상태 항목을 만들기
+    /// **전**이고(항목은 태어나는 순간 저장된 자리를 읽는다), 그때는 잴 항목 자체가 없어 그 자리가
+    /// 가려지는지 알 방법이 없다. 재지 않고 덮어쓰면 보이는 사용자 자리까지 함께 빼앗는다.
+    /// 그래서 가려진 자리를 고치는 일은 **재고 미는 한 길**로 모았다 (`nudgedPosition`) —
+    /// 거기에는 되먹임과 상한이 있다.
     public static func seedPosition(stored: Double?, screen: MenuBarSpan, notch: MenuBarSpan?) -> Double? {
         guard stored == nil, let notch else { return nil }
         let value = (screen.maxX - notch.maxX) - notchClearance
@@ -214,10 +242,14 @@ public enum StatusItemSeat {
     /// 미는 폭은 상수가 아니라 **방금 잰 좌표에서 나온다** — 오른쪽 첫 빈 구간까지 얼마나 가야
     /// 하는지 계산해 그만큼 값을 줄인다. 값과 좌표가 정확히 1:1 은 아니지만(위 표의 계단),
     /// 밀고 다시 재는 되먹임이라 한두 번이면 닿는다.
+    ///
+    /// **저장된 값이 사용자가 적은 것이어도 가려졌으면 민다.** 사용자가 고른 자리를 지키는 것은
+    /// 그 사람이 그 자리를 **볼 수 있을 때** 성립하는 원칙이다 (`isUserPlaced(isHidden:)`).
     public static func nudgedPosition(placement: StatusItemPlacement, state: StatusItemSeatState) -> Double? {
+        // **이 한 줄이 사용자 자리를 지킨다.** 보이는 자리는 여기서 돌아서므로, 사용자가 골라 둔
+        // 자리(`isUserPlaced(isHidden:)`)는 앱이 옮길 길이 없다. 가려진 자리만 아래로 내려간다 —
+        // 그리고 가려진 자리는 누가 적었든 고른 자리가 아니다. **판정을 두 곳에 두지 않는다.**
         guard placement.isMeasurable, placement.isHidden else { return nil }
-        // 사용자가 고른 자리는 앱이 옮기지 않는다. 가려져 있어도 그렇다 — 그때는 말로 알린다.
-        guard !state.isUserPlaced else { return nil }
         guard state.nudges < nudgeLimit else { return nil }
         // 심어 둔 값이 없으면 얼마를 빼야 할지 알 수 없다. 좌표와 값의 어긋남(60pt 안팎)이
         // 기계마다 다를 수 있어 짐작으로 쓰면 엉뚱한 자리로 보낸다.
@@ -316,7 +348,7 @@ public enum MenuBarSeatReport {
         var facts: [String] = []
         if lastKnownHidden != nil { facts.append("마지막 확인") }
         if let hasNotch { facts.append(hasNotch ? "노치 있는 화면" : "노치 없는 화면") }
-        facts.append(seatText(state))
+        facts.append(seatText(state, lastKnownHidden: lastKnownHidden))
         if state.nudges > 0 { facts.append("앱이 \(state.nudges)번 옮겨 봄") }
         let detail = "(" + facts.joined(separator: " · ") + ")"
 
@@ -330,9 +362,19 @@ public enum MenuBarSeatReport {
         }
     }
 
-    private static func seatText(_ state: StatusItemSeatState) -> String {
+    /// 자리를 누가 정했는지는 **앱의 판정과 같은 말로** 적는다. 앱이 지켜 주지 않는 자리를
+    /// "사용자가 옮긴 위치" 라고 적으면, 진단을 읽은 사람은 아이콘이 왜 움직였는지 알 수 없다.
+    private static func seatText(_ state: StatusItemSeatState, lastKnownHidden: Bool?) -> String {
         guard let stored = state.stored else { return "위치를 정한 적 없음" }
-        let who = state.isUserPlaced ? "사용자가 옮긴 위치" : "앱이 정한 위치"
+        let who: String
+        if state.isUserPlaced(isHidden: lastKnownHidden) {
+            who = "사용자가 옮긴 위치"
+        } else if state.isAppPlaced {
+            who = "앱이 정한 위치"
+        } else {
+            // 사용자가 적은 값인데 그 자리가 가려져 있다. 앱은 이 자리를 지켜 주지 않는다.
+            who = "사용자가 옮겼지만 가려진 위치"
+        }
         return "오른쪽 끝에서 \(points(stored))pt · \(who)"
     }
 

@@ -86,7 +86,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // 자리를 먼저 심고 항목을 만든다 — 순서를 뒤집으면 항목은 이미 놓인 뒤라 값을 읽지 않는다.
         //
         // 심는 것은 **저장된 자리가 없고 화면에 노치가 있을 때뿐이다** (`StatusItemSeat.seedPosition`).
-        // 사용자가 옮겨 둔 자리는 손대지 않는다.
+        // 저장된 자리는 그것이 가려지든 아니든 여기서 덮어쓰지 않는다 — 항목이 아직 없어 잴 수가 없다.
+        // 가려진 자리를 고치는 일은 항목을 만든 뒤 재고 미는 쪽(`MenuBarVisibilityWatch`)이 맡는다.
         MenuBarSeat.seedIfNeeded(autosaveName: Self.statusItemAutosaveName, store: UserDefaults.standard)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
