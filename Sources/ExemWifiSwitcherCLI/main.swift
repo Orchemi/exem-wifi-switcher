@@ -62,10 +62,15 @@ case "help", "-h", "--help":
     print(usage)
 
 case "validate":
-    let config = loadConfig(configPath)
-    print("설정 파일이 유효합니다: \(configPath)")
-    print("  네트워크 서비스: \(config.service)")
-    print("  프로필 \(config.profiles.count)개, 기본 프로필: \(config.defaultProfile)")
+    // 판정은 **앱이 쓰는 것과 같은 것**을 쓴다 (`AppConfig.inspect`).
+    // 형식만 보고 "유효합니다" 라고 답하면, 예시 그대로인 파일을 두고
+    // 앱은 '아직 저장 안 됨' · CLI 는 '유효함' 이라고 서로 다르게 말하게 된다.
+    let report = ConfigValidationReport.make(path: configPath)
+    if report.isReadyForApp {
+        report.lines.forEach { print($0) }
+    } else {
+        fail(report.lines.joined(separator: "\n"))
+    }
 
 case "profiles":
     let config = loadConfig(configPath)
