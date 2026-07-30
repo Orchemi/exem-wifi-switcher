@@ -677,10 +677,19 @@ if grep -q 'launchctl bootout "gui/\$TARGET_UID/' "$REPO_ROOT/scripts/uninstall.
 else
     t_fail "uninstall 이 대상 계정의 GUI 도메인을 쓰지 않습니다 (root 로 실행하면 남의 도메인을 봅니다)"
 fi
-if grep -q 'run_as_target_user tccutil reset Location' "$REPO_ROOT/scripts/uninstall.sh"; then
+# tccutil reset Location 은 SIP 로 보호된 영역이라 사용자 권한으로도 root 로도 실패한다
+# (2026-07-30 실측). 실패가 정해진 명령을 스크립트가 부르지 않는지, 그리고 실행할 수 없는
+# "직접 실행하세요" 대안을 주지 않는지 본다.
+# 주석은 그 실측 근거를 남기는 자리라 세지 않는다 — 실제로 실행하는 줄만 본다.
+if grep -vE '^[[:space:]]*#' "$REPO_ROOT/scripts/uninstall.sh" | grep -q 'tccutil reset Location'; then
+    t_fail "uninstall 이 실패가 정해진 tccutil reset Location 명령을 여전히 부릅니다"
+else
+    t_pass
+fi
+if grep -q '시스템 설정 > 개인정보 보호 및 보안 > 위치 서비스' "$REPO_ROOT/scripts/uninstall.sh"; then
     t_pass
 else
-    t_fail "uninstall 이 위치 권한 기록을 대상 계정으로 지우지 않습니다"
+    t_fail "uninstall 이 위치 권한 기록을 지우는 실제 경로(시스템 설정)를 안내하지 않습니다"
 fi
 
 t_section "save-config"
@@ -739,9 +748,19 @@ case "$uninstall_output" in
     *"save-config"*) t_pass ;;
     *) t_fail "uninstall 이 save-config 를 언급하지 않습니다" ;;
 esac
+# tccutil 로 앱 하나만 지목해 위치 권한 기록을 지우는 길은 SIP 로 막혀 있다
+# (사용자 권한으로도 root 로도 실패, 2026-07-30 실측). 그 사실과 실제로 할 수 있는 것을 말해야 한다.
 case "$uninstall_output" in
-    *"tccutil reset Location"*) t_pass ;;
-    *) t_fail "uninstall 이 위치 권한(TCC) 기록을 정리하지 않습니다" ;;
+    *"위치 권한(TCC) 기록은 macOS 가 들고 있어 이 스크립트가 지우지 못합니다"*) t_pass ;;
+    *) t_fail "uninstall 이 위치 권한 기록을 지우지 못한다는 사실을 말하지 않습니다" ;;
+esac
+case "$uninstall_output" in
+    *"tccutil reset Location"*) t_fail "uninstall 이 실패가 정해진 tccutil reset Location 을 여전히 계획에 싣습니다" ;;
+    *) t_pass ;;
+esac
+case "$uninstall_output" in
+    *"남아 있어도 다음 설치를 막지 않습니다"*) t_pass ;;
+    *) t_fail "uninstall 이 위치 권한 기록이 남아도 다음 설치에 지장이 없다는 사실을 말하지 않습니다" ;;
 esac
 # 앱 설정값 경로는 HOME 에서 만들어진다. HOME 이 없는 환경(테스트 러너)에서는 출력에 나오지
 # 않으므로 스크립트 자체를 본다. cfprefsd 캐시 때문에 파일만 지워서는 되살아난다 — defaults 도 함께 봐야 한다.

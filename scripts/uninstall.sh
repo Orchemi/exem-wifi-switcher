@@ -10,7 +10,6 @@
 #                                                  옛 방식 로그인 항목 (0.1.0 이전 버전에서 켠 경우에만)
 #   ~/Library/Preferences/com.horbis.exem-wifi-switcher.plist
 #                                                  앱이 남긴 설정값(자동 전환 on/off 등)
-#   위치 권한(TCC) 기록                             tccutil reset Location <번들 ID>
 #
 # 지우지 않는 것 (지울 수 없거나, 사용자 것이라 건드리지 않는다)
 #   EXEM Wifi Switcher.app                         사용자가 둔 자리에 그대로 있다. 직접 지운다
@@ -18,9 +17,19 @@
 #   지금 방식의 로그인 항목(SMAppService)           파일이 아니라 macOS 가 들고 있는 기록이라
 #                                                  셸에서 끌 공개 수단이 없다. 앱의 체크상자로 끄거나
 #                                                  앱 번들을 지우면 macOS 가 함께 정리한다
+#   위치 권한(TCC) 기록                             SIP 가 보호하는 영역이라 tccutil 로도 번들 하나만
+#                                                  지목해 지우는 길이 없다 (2026-07-30 실측 — 사용자
+#                                                  권한으로도 root 로도 "Failed to reset Location
+#                                                  approval status" 로 똑같이 실패했다). 이 앱은
+#                                                  ad-hoc 서명이라 빌드마다 서명이 달라지고 위치 권한도
+#                                                  그 서명에 매여 있어(docs/updating.md), 새 버전을
+#                                                  깔면 기록이 남아 있어도 macOS 가 다시 묻는다 —
+#                                                  다음 설치를 막지 않는다. 지우려면 시스템 설정 >
+#                                                  개인정보 보호 및 보안 > 위치 서비스에서 직접 뺀다
 #
 # 마지막에 위 파일들이 정말 사라졌는지 다시 확인하고, 하나라도 남으면 실패로 끝난다.
-# 지우지 않은 것(앱 번들·알림 권한)은 마무리 문구에 그대로 적는다 — "전부 지웠다" 로 뭉뚱그리지 않는다.
+# 지우지 않은 것(앱 번들·알림 권한·위치 권한 기록)은 마무리 문구에 그대로 적는다 —
+# "전부 지웠다" 로 뭉뚱그리지 않는다.
 #
 # 미리 보기:  ./scripts/uninstall.sh --dry-run
 #
@@ -178,8 +187,8 @@ if [ -n "$TARGET_HOME" ] && [ "$TARGET_HOME" != "/" ]; then
     PREFERENCES_PLIST="$TARGET_HOME/Library/Preferences/$BUNDLE_ID.plist"
 fi
 
-# 사용자 맥락이 필요한 명령(defaults · tccutil)은 그 사용자로 실행한다.
-# root 로 실행하면 root 의 설정과 root 의 권한 기록을 건드리게 된다.
+# 사용자 맥락이 필요한 명령(defaults)은 그 사용자로 실행한다.
+# root 로 실행하면 root 의 설정을 건드리게 된다.
 run_as_target_user() {
     if [ "$IS_ROOT" -eq 1 ] && [ "$TARGET_USER" != "root" ]; then
         sudo -u "$TARGET_USER" "$@"
@@ -225,8 +234,9 @@ if [ -n "$PREFERENCES_PLIST" ]; then
     report_target "$PREFERENCES_PLIST" "(앱 설정값 — 자동 전환 on/off 등)"
 fi
 
-# 아래 둘은 파일이 아니라 상태다. 남아 있는지 파일처럼 확인할 수 없으므로 항상 시도한다.
-printf '  [시도] 위치 권한(TCC) 기록 초기화 — tccutil reset Location %s\n' "$BUNDLE_ID"
+# 실행 중인 앱은 파일이 아니라 상태다. 남아 있는지 파일처럼 확인할 수 없으므로 매번 다시 본다.
+# (위치 권한(TCC) 기록도 파일이 아닌 상태지만, macOS 가 이것을 지우는 명령을 제공하지 않아
+# 이 스크립트가 시도할 것 자체가 없다 — 6/6 과 마무리 문구에서 안내만 한다)
 if pgrep -x "$APP_PROCESS_NAME" >/dev/null 2>&1; then
     if [ "$SKIP_RUNNING_APP" -eq 1 ]; then
         printf '  [있음] 실행 중인 앱 — 종료하지 않습니다 (--skip-running-app)\n'
@@ -241,10 +251,7 @@ fi
 printf '\n앱 번들(%s.app)은 사용자가 둔 자리에 있어 이 스크립트가 지우지 않습니다. 직접 지우세요.\n\n' "$APP_PROCESS_NAME"
 
 if [ "$present_count" -eq 0 ]; then
-    printf '지울 파일이 없습니다. 위치 권한 기록만 정리하고 끝냅니다.\n'
-    if [ "$DRY_RUN" -eq 0 ]; then
-        run_as_target_user tccutil reset Location "$BUNDLE_ID" >/dev/null 2>&1 || true
-    fi
+    printf '지울 파일이 없습니다.\n'
     exit 0
 fi
 
@@ -368,16 +375,19 @@ else
     printf '    앱 설정값이 없습니다\n'
 fi
 
-# 위치 권한(TCC)은 번들 ID 에 귀속된다. 지우지 않으면 나중에 다시 설치했을 때
-# "승인한 적 없는데 승인돼 있는" 상태가 남는다. 실패해도 제거를 멈추지 않는다.
-if [ "$DRY_RUN" -eq 1 ]; then
-    printf '    [dry-run] tccutil reset Location %s\n' "$BUNDLE_ID"
-elif run_as_target_user tccutil reset Location "$BUNDLE_ID" >/dev/null 2>&1; then
-    printf '    위치 권한 기록을 초기화했습니다: %s\n' "$BUNDLE_ID"
-else
-    printf '    위치 권한 기록을 초기화하지 못했습니다. 직접 실행하세요:\n'
-    printf '      tccutil reset Location %s\n' "$BUNDLE_ID"
-fi
+# 위치 권한(TCC)은 SIP 가 보호하는 영역이라 tccutil 로 번들 하나만 지목해 지우는 길이 없다.
+# 2026-07-30 에 오너 기계에서 실제로 tccutil reset Location <번들 ID> 를 시도해 확인했다 —
+# 사용자 권한으로도 root 로도 "Failed to reset Location approval status" 로 똑같이 실패했다.
+# 그래서 이 스크립트는 그 명령을 부르지 않는다: 실패가 정해진 명령을 매번 실행하면서
+# "직접 실행하세요" 로 똑같이 실행할 수 없는 대안을 주는 것은 안내가 아니라 오해다.
+#
+# 이 앱은 ad-hoc 서명이라 빌드마다 서명이 달라지고 위치 권한도 그 서명에 매여 있다
+# (docs/updating.md). 그래서 새 버전을 설치하면 macOS 가 위치 권한을 다시 묻는다 —
+# 이 기록이 남아 있어도 다음 설치를 방해하지 않는다.
+printf '    위치 권한(TCC) 기록은 macOS 가 들고 있어 이 스크립트가 지우지 못합니다\n'
+printf '      · macOS 는 tccutil 로 앱 하나만 지목해 이 기록을 지우는 길을 제공하지 않습니다\n'
+printf '      · 지우려면 시스템 설정 > 개인정보 보호 및 보안 > 위치 서비스에서 직접 빼세요\n'
+printf '      · 남아 있어도 다음 설치를 막지 않습니다. 서명이 바뀔 때마다 macOS 가 다시 묻습니다\n'
 
 # --- 잔여물 확인 ------------------------------------------------------------
 
@@ -431,3 +441,5 @@ printf '  - 앱 번들: %s.app — 둔 자리에서 직접 지우세요\n' "$APP
 printf '  - 로그인 항목: 앱 설정 창에서 끄거나, 앱 번들을 지우면 함께 사라집니다\n'
 printf '  - 알림 권한: 시스템 설정 > 알림 에서 %s 항목을 지우세요\n' "$APP_PROCESS_NAME"
 printf '    (macOS 는 알림 설정을 명령으로 지울 방법을 제공하지 않습니다)\n'
+printf '  - 위치 권한 기록: 시스템 설정 > 개인정보 보호 및 보안 > 위치 서비스 에서 %s 항목을 지우세요\n' "$APP_PROCESS_NAME"
+printf '    (macOS 는 이 기록을 명령으로 지울 방법을 제공하지 않습니다. 남아 있어도 다음 설치는 막지 않습니다)\n'

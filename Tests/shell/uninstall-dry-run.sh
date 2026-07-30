@@ -117,6 +117,29 @@ if [ -d "$SCRATCH/target/etc" ]; then t_pass; else
     t_fail "설정 디렉터리 사본이 dry-run 인데도 사라졌습니다"
 fi
 
+# --- 위치 권한(TCC) 기록 — 실행할 수 없는 명령을 안내하지 않는다 -----------------
+#
+# tccutil reset Location <번들 ID> 는 SIP 가 보호하는 영역이라 사용자 권한으로도 root 로도
+# 실패한다(2026-07-30 실측). 이 스크립트가 그 명령을 더는 부르지 않는지, 그리고 실행할 수
+# 없는 "직접 실행하세요" 대안을 주지 않는지 본다. 실제로 할 수 있는 것(시스템 설정)과
+# 남아 있어도 지장이 없다는 사실은 안내에 남아 있어야 한다.
+
+t_section "위치 권한 기록 — 실패가 정해진 명령을 부르지 않는다"
+t_silent_about "tccutil reset Location" "dry-run 계획에 실패가 정해진 tccutil 명령이 실린다" -- \
+    bash "$FIXTURE" --dry-run --yes --skip-running-app
+t_silent_about "직접 실행하세요" \
+    "실행할 수 없는 명령을 '직접 실행하세요' 로 안내한다" -- \
+    bash "$FIXTURE" --dry-run --yes --skip-running-app
+t_says "위치 권한(TCC) 기록은 macOS 가 들고 있어 이 스크립트가 지우지 못합니다" \
+    "위치 권한 기록을 지우지 못한다는 사실이 안내된다" -- \
+    bash "$FIXTURE" --dry-run --yes --skip-running-app
+t_says "시스템 설정 > 개인정보 보호 및 보안 > 위치 서비스" \
+    "실제로 지울 수 있는 경로(시스템 설정)가 안내된다" -- \
+    bash "$FIXTURE" --dry-run --yes --skip-running-app
+t_says "남아 있어도 다음 설치를 막지 않습니다" \
+    "기록이 남아도 다음 설치에 지장이 없다는 사실이 안내된다" -- \
+    bash "$FIXTURE" --dry-run --yes --skip-running-app
+
 # --- 종료코드 --------------------------------------------------------------
 
 t_section "dry-run 은 성공으로 끝난다"
