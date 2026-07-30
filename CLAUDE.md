@@ -33,7 +33,7 @@ Resources/icons/         # 메뉴바 템플릿 아이콘 + 앱 아이콘
 scripts/                 # apply·save-config(root 실행) · install.sh · uninstall.sh
                          # build-app.sh(번들 조립) · package-release.sh(배포 zip)
 config.example.json      # 설정 예시 (실 설정은 /usr/local/etc 에만 둔다)
-docs/                    # 계획 문서
+docs/                    # 계획 문서 · README 스크린샷(screenshots/ — 번들에 들어가지 않는다)
 ```
 
 **앱 번들은 설치 스크립트를 품는다.** `build-app.sh` 가 `install.sh` · `uninstall.sh` ·

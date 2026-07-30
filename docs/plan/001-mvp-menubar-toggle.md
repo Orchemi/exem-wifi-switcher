@@ -575,7 +575,12 @@ Phase 2 에서 발견한 문제다. `NSStatusItem` 이 `isVisible=true` 이고 �
 - [x] `scripts/install.sh` — 하는 일을 먼저 고지. 레포와 앱 번들 양쪽에서 실행된다
 - [x] `scripts/uninstall.sh` — 완전 원복. 앱에서도 부를 수 있다
 - [x] `scripts/package-release.sh` — 배포 zip + SHA-256 + 배포 전 점검 (RULES.md §4)
-- [ ] `README.md` 스크린샷 (메뉴바 표시 문제가 풀린 뒤)
+- [x] `README.md` 스크린샷 2장 (`docs/screenshots/` — 메뉴 · 설정 창, 둘 다 초기 설정을 마친 상태).
+      **가짜 관측값을 진짜 화면에 먹여 찍었다** — 값은 문서용 예약 대역이고 실기 값이 아니다.
+      번들에는 들어가지 않는다 (`build-app.sh` 는 `Resources/icons` 와 `scripts` 만 담는다).
+      찍을 때 알게 된 것 둘: 상태 항목 메뉴는 **앱 외양이 아니라 메뉴 막대의 외양**을 따르고
+      (라이트로 못박으려면 `NSMenu.appearance` 를 준다), 창을 메뉴 층으로 올리면 **선택된
+      글자가 그려지지 않는다** (IP 칸이 빈 것처럼 찍힌다)
 - [ ] 첫 릴리즈 게시 (앱 안 [설치]·[제거] 실동작 확인은 오너가 실기기에서 수행)
 - [ ] GitHub Actions: 빌드 검증 (선택)
 - [x] macOS 업데이트로 설정이 풀렸을 때 복구 절차를 README에 기록
