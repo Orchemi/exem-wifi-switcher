@@ -19,6 +19,13 @@ struct Observation: Sendable {
     /// 현재 설정된 DNS 서버를 읽은 결과. 온보딩이 초안을 만들 때 쓴다.
     /// **"없음" 과 "읽지 못함" 을 구분한다** — 읽지 못한 것을 없음으로 저장하면 이름 해석이 끊긴다.
     var dnsServers: DNSReading
+    /// 지금 이름 해석에 실제로 쓰이는 IPv4 리졸버 (`scutil --dns`).
+    ///
+    /// **`dnsServers` 와 섞지 마라.** 이 값은 수동 지정 값이 아니라 **제안**이다
+    /// (DHCP 가 알려준 값이 여기 들어온다). 자동 전환 판정은 이 값을 보지 않는다 —
+    /// 제안을 적용 여부 판단에 쓰면 걸지도 않은 프로필을 '이미 적용됨' 으로 볼 수 있다.
+    /// 쓰는 곳은 설정 창의 DNS 칸 하나다 (`DNSFieldState`).
+    var activeResolvers: [String]
     /// 이 시스템에 있는 네트워크 서비스 이름. 설정 창의 선택 목록이 된다.
     var services: [String]
 
@@ -33,6 +40,7 @@ struct Observation: Sendable {
         location: .notDetermined,
         ssid: .unavailable("아직 읽지 않았습니다"),
         dnsServers: .unreadable("아직 읽지 않았습니다"),
+        activeResolvers: [],
         services: []
     )
 
@@ -129,6 +137,7 @@ struct SystemProbe: Sendable {
             location: locationAuthorization,
             ssid: ssidReader.read(authorization: locationAuthorization),
             dnsServers: reader.readDNSServers(),
+            activeResolvers: reader.readActiveResolvers(),
             services: services
         )
     }

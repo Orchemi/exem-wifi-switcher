@@ -122,7 +122,7 @@ struct DNSReadingTests {
             subnet: SubnetMask("255.255.255.0"),
             router: IPv4Address("192.0.2.1")
         )
-        let draft = ManualProfileDraft.from(info, dns: .unreadable("조회 실패"), ssid: .connected("EXAMPLE-AP"))
+        let draft = ManualProfileDraft.from(info, dns: .unavailable(reason: "조회 실패"), ssid: .connected("EXAMPLE-AP"))
         // 주소는 제안하되 DNS 칸은 비워둔다. 그리고 그 사실을 창이 알린다.
         #expect(draft?.dns == "")
         #expect(draft?.ip == "192.0.2.10")

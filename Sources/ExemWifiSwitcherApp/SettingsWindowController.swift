@@ -65,6 +65,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     /// Wi-Fi 서비스를 못 찾았을 때만 남는 안내. 저장 실패 문구와 같은 줄을 쓰므로
     /// 상태로 들고 있다가 그 문구를 지울 때 되돌린다.
     private var serviceNotice: String?
+    /// DNS 칸 아래에 **우리가 적어 둔** 안내. 검증 오류도 같은 줄을 쓰므로,
+    /// 지금 그 줄에 있는 것이 우리 것인지 가리는 데 쓴다 (오류를 덮어쓰면 안 된다).
+    private var dnsNoticeText: String?
 
     /// **빈 칸이 있으면 누를 수 없다.** 아직 아무것도 적지 않은 사람에게 칸마다 오류를 붙이는 것은
     /// 틀린 값을 적었을 때 할 말이지 지금 할 말이 아니다 (`ManualProfileDraft.hasRequiredValues`).
@@ -281,7 +284,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         serviceNotice = serviceFound ? nil : "Wi-Fi 서비스 없음 · 위에서 사용할 서비스 선택"
 
         clearIssues()
-        showDNSReadFailureIfNeeded()
+        refreshDNSNotice()
     }
 
     /// 저장된 사내 프로필의 값. **세 값이 다 있어야** 그 프로필을 보고 있다고 말할 수 있다.
@@ -299,7 +302,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     /// 지금 시스템 구성에서 읽어낸 값. 고정 IP 로 돌고 있을 때만 나온다.
     private var currentConfigurationDraft: ManualProfileDraft? {
         observation.interface.flatMap {
-            ManualProfileDraft.from($0, dns: observation.dnsServers, ssid: observation.ssid)
+            ManualProfileDraft.from($0, dns: dnsFieldState, ssid: observation.ssid)
         }
     }
 
@@ -372,6 +375,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         // '채울 것이 없음' 이 '아직 저장 안 됨' 이 되고, 못 누르던 [저장] 이 살아난다.
         refreshIntro()
         updateSaveAvailability()
+        // 방금 채워진 DNS 가 제안이라는 사실도 함께 따라와야 한다 — 값만 들어오고 안내가
+        // 없으면 저장된 설정으로 보인다.
+        //
+        // 줄이 들고 나면 창이 그만큼 자라거나 줄어야 한다. 창을 열어 둔 채 사내 Wi-Fi 에
+        // 붙는 순간이 이 경로이고, 그때 두 줄짜리 안내가 붙으면서 아래쪽이 잘린다.
+        if refreshDNSNotice() {
+            window?.setContentSize(window?.contentView?.fittingSize ?? NSSize(width: Self.windowWidth, height: 320))
+        }
         refreshPermissions()
     }
 
@@ -404,18 +415,54 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         saveButton.isEnabled = canSave
     }
 
-    /// 현재 DNS 설정을 **읽지 못했으면** 그 사실을 DNS 칸에 남긴다.
+    /// DNS 칸의 값이 **어디서 왔는지**를 칸 아래에 남긴다.
     ///
-    /// 읽지 못한 것을 빈 칸으로 두면 사용자가 "원래 없구나" 로 읽는다. 고정 IP 프로필에서
-    /// 그렇게 저장하면 이름 해석이 끊긴다. 조용히 넘어가지 않는다.
-    private func showDNSReadFailureIfNeeded() {
-        guard let reason = observation.dnsServers.failureReason,
-              dnsField.stringValue.isEmpty,
-              let label = errorLabels[.dns]
-        else { return }
-        label.textColor = .systemRed
-        label.stringValue = "현재 DNS 를 읽지 못함 (\(reason)) · 직접 입력"
-        errorRows[.dns]?.isHidden = false
+    /// 세 경우가 다른 말을 한다 (판정과 문구는 `DNSFieldState` 가 들고 있다).
+    ///
+    ///   - **수동 지정 값**: 사용자가 정한 값이므로 할 말이 없다
+    ///   - **제안**: 지금 쓰이는 리졸버를 읽어 채운 값이다. 저장된 설정으로 오해하면 안 되므로
+    ///     출처와 함께 확인하고 저장하라고 적는다
+    ///   - **아무것도 못 읽음**: 빈 칸을 "원래 없구나" 로 읽으면 그대로 저장하게 되고,
+    ///     고정 IP 프로필에서 그것은 이름 해석이 끊기는 설정이다. 조용히 넘어가지 않는다
+    ///
+    /// **칸에 있는 값이 우리가 넣은 값일 때만** 말한다. 사용자가 고쳐 적었으면 그것은 제안이
+    /// 아니고, 검증 오류가 붙어 있으면 그 오류가 이긴다.
+    ///
+    /// - Returns: 안내 줄이 들거나 났는가. 그때만 창 높이를 다시 잡으면 된다.
+    @discardableResult
+    private func refreshDNSNotice() -> Bool {
+        guard let label = errorLabels[.dns] else { return false }
+        // 검증 오류가 붙어 있으면 건드리지 않는다.
+        guard label.stringValue.isEmpty || label.stringValue == dnsNoticeText else { return false }
+
+        let state = dnsFieldState
+        var notice: DNSFieldState.Notice?
+        switch state {
+        case .configured:
+            notice = nil
+        case .suggested:
+            // 칸에 우리가 채운 값이 그대로 있을 때만 제안이라고 말한다.
+            notice = dnsField.stringValue == state.fieldText ? state.notice : nil
+        case .unavailable:
+            notice = dnsField.stringValue.isEmpty ? state.notice : nil
+        }
+
+        let wasHidden = errorRows[.dns]?.isHidden ?? true
+        dnsNoticeText = notice?.text
+        label.stringValue = notice?.text ?? ""
+        // **제안은 오류가 아니다.** 값이 들어와 있는데 빨갛게 쓰면 고장으로 읽힌다.
+        label.textColor = notice?.isError == true ? .systemRed : .secondaryLabelColor
+        errorRows[.dns]?.isHidden = notice == nil
+        return wasHidden != (notice == nil)
+    }
+
+    /// DNS 칸이 들고 있어야 할 값과 그 출처. **두 창을 함께 본다** —
+    /// 수동 지정(`networksetup`)이 없으면 지금 쓰이는 리졸버(`scutil`)를 제안한다.
+    private var dnsFieldState: DNSFieldState {
+        DNSFieldState.resolve(
+            manual: observation.dnsServers,
+            activeResolvers: observation.activeResolvers
+        )
     }
 
     private func fill(_ draft: ManualProfileDraft) {
@@ -1163,6 +1210,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             label.stringValue = ""
             errorRows[field]?.isHidden = true
         }
+        // DNS 안내도 함께 사라졌다. 우리가 적어 둔 것이 있다는 기억을 남기면
+        // 다음에 붙는 검증 오류를 우리 것으로 오인해 지운다.
+        dnsNoticeText = nil
         // 안내 줄은 오류와 자리를 나눠 쓴다 — 오류를 지웠으면 그 자리로 돌아온다.
         noticeLabel.stringValue = serviceNotice ?? ""
         noticeLabel.isHidden = serviceNotice == nil

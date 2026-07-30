@@ -90,6 +90,22 @@ public struct NetworkStateReader {
         }
     }
 
+    /// 지금 이름 해석에 실제로 쓰이는 IPv4 리졸버를 읽는다 (`scutil --dns`).
+    ///
+    /// `-getdnsservers` 와 **보는 것이 다르다.** 그쪽은 수동 지정 값만 보여주고, 이쪽은
+    /// DHCP 가 알려준 값까지 보여준다. 수동 지정이 없을 때 설정 창이 제안할 값이 여기서 나온다.
+    ///
+    /// 읽지 못하면 빈 배열이다. 제안이 없을 뿐이라 실패로 다룰 것이 없다
+    /// (사용자는 직접 입력할 수 있고, 화면이 그 사실을 말한다).
+    ///
+    /// **서비스 이름을 받지 않는다.** `scutil --dns` 는 시스템 전체의 리졸버 구성을 보여준다.
+    public func readActiveResolvers() -> [String] {
+        guard let result = try? SystemCommand.run([InstallPaths.scutilBinary, "--dns"]),
+              result.succeeded
+        else { return [] }
+        return ScutilDNSOutput.activeResolvers(result.standardOutput)
+    }
+
     /// 시스템에 존재하는 네트워크 서비스 목록.
     public static func availableServices() throws -> [String] {
         let result = try SystemCommand.run([InstallPaths.networksetupBinary, "-listallnetworkservices"])

@@ -482,6 +482,14 @@ main() {
             die "$EXIT_NETWORKSETUP" "DNS 서버 설정에 실패했습니다 ('$service'). 네트워크는 그대로 둡니다"
         fi
     elif [ "$PROFILE_MODE" = "dhcp" ]; then
+        # `Empty` 는 **수동 지정을 지운다.** DHCP 가 알려주는 값을 쓰게 하려면 이 방법뿐이고,
+        # 지우지 않으면 사내 DNS 를 문 채 사외 네트워크에서 돌게 된다. 그래서 의도된 동작이다.
+        #
+        # 부작용 하나를 알고 있어야 한다. 사내 값이 **수동 지정으로 남아 있지 않으므로**
+        # 사내로 돌아와 설정 창을 열면 DNS 칸이 빈다. 사용자에게는 값이 지워진 것으로 보인다.
+        # 그 자리를 앱이 `scutil --dns` 로 메운다 — 지금 쓰이는 리졸버를 읽어 제안하고,
+        # 제안이라는 사실을 칸 아래에 적는다 (`Sources/WifiSwitcherCore/ScutilDNSOutput.swift`).
+        # **한 번 저장해 두면 다시 채워진다.**
         if ! networksetup -setdnsservers "$service" "Empty"; then
             die "$EXIT_NETWORKSETUP" "DNS 서버 초기화에 실패했습니다 ('$service'). 네트워크는 그대로 둡니다"
         fi

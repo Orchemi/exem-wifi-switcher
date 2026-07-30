@@ -34,6 +34,9 @@ public enum InstallPaths {
     public static let sudoBinary = "/usr/bin/sudo"
     public static let networksetupBinary = "/usr/sbin/networksetup"
 
+    /// 지금 쓰이는 리졸버를 읽을 때만 쓴다 (`scutil --dns`). **읽기 전용 호출이다.**
+    public static let scutilBinary = "/usr/sbin/scutil"
+
     // MARK: - 앱 번들 (Phase 2)
     //
     // 이 값들은 계획 문서(docs/plan/001)의 "네이밍 (고정)" 표와 같아야 한다.

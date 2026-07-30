@@ -37,14 +37,16 @@ public struct ManualProfileDraft: Equatable, Sendable {
     /// 지금 쓰는 주소는 빌린 것이라 사내 고정 IP 로 저장할 근거가 없다 — 그때는 nil 이고,
     /// 온보딩은 직접 입력을 받는다.
     ///
-    /// DNS 를 **읽지 못했으면 칸을 비워 둔다.** 읽지 못한 것을 "없음" 으로 채워 넣으면
-    /// 사용자가 그 빈 값을 자기 설정인 줄 알고 저장한다. 창은 그 사실을 따로 알린다.
+    /// DNS 는 **어디서 읽었는지까지 정해진 값**을 받는다 (`DNSFieldState`). 수동 지정 값이 없으면
+    /// 지금 쓰이고 있는 리졸버가 제안으로 들어오고, 그것도 없으면 칸이 빈다. 읽지 못한 것을
+    /// "없음" 으로 채워 넣지 않는다 — 사용자가 그 빈 값을 자기 설정인 줄 알고 저장한다.
+    /// 값이 제안인지 아닌지는 창이 따로 알린다 (`DNSFieldState.notice`).
     ///
     /// - Parameter ssid: 지금 접속한 Wi-Fi 이름. **수동 구성일 때만** 초안에 넣는다.
     ///   지금 이 자리에서 고정 IP 로 돌고 있다는 것은 여기가 그 프로필을 쓰는 자리라는 뜻이다.
     ///   (DHCP 로 도는 자리에서 지금 Wi-Fi 이름을 넣으면 집·카페 이름이 사내 프로필에 박힌다 —
     ///   그 순간 그 자리에서 사내 고정 IP 가 걸린다. 읽지 못했을 때도 마찬가지로 비워 둔다)
-    public static func from(_ info: InterfaceInfo, dns: DNSReading, ssid: SSIDReading) -> ManualProfileDraft? {
+    public static func from(_ info: InterfaceInfo, dns: DNSFieldState, ssid: SSIDReading) -> ManualProfileDraft? {
         guard info.configMethod == .manual,
               let ip = info.ip, let subnet = info.subnet, let router = info.router
         else { return nil }
@@ -52,7 +54,7 @@ public struct ManualProfileDraft: Equatable, Sendable {
             ip: ip.description,
             subnet: subnet.description,
             router: router.description,
-            dns: dns.servers.joined(separator: ", "),
+            dns: dns.fieldText,
             ssids: ssid.name ?? ""
         )
     }

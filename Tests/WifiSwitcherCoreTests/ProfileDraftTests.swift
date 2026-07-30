@@ -141,7 +141,7 @@ struct ProfileDraftTests {
             subnet: SubnetMask("255.255.255.0"),
             router: IPv4Address("192.0.2.1")
         )
-        let draft = ManualProfileDraft.from(info, dns: .servers(["192.0.2.53"]), ssid: .connected("EXAMPLE-AP"))
+        let draft = ManualProfileDraft.from(info, dns: .configured(["192.0.2.53"]), ssid: .connected("EXAMPLE-AP"))
         #expect(draft?.ip == "192.0.2.10")
         #expect(draft?.subnet == "255.255.255.0")
         #expect(draft?.router == "192.0.2.1")
@@ -160,7 +160,7 @@ struct ProfileDraftTests {
             router: IPv4Address("192.0.2.1")
         )
         for reading in [SSIDReading.permissionDenied, .permissionNotDetermined, .notAssociated, .wifiOff] {
-            let draft = ManualProfileDraft.from(info, dns: .servers(["192.0.2.53"]), ssid: reading)
+            let draft = ManualProfileDraft.from(info, dns: .configured(["192.0.2.53"]), ssid: reading)
             // 나머지 값은 그대로 제안한다 — 이름 하나 못 읽었다고 온보딩 전체를 막지 않는다.
             #expect(draft?.ip == "192.0.2.10")
             #expect(draft?.ssids == "", "\(reading) 에서 엉뚱한 이름이 들어갔다")
@@ -177,13 +177,13 @@ struct ProfileDraftTests {
         )
         // Wi-Fi 이름이 읽히더라도 마찬가지다. DHCP 로 도는 자리는 사내가 아닐 수 있고,
         // 집·카페 이름을 사내 프로필에 적어 두면 **그 자리에서 사내 고정 IP 가 걸린다.**
-        #expect(ManualProfileDraft.from(info, dns: .servers([]), ssid: .connected("HOME-AP")) == nil)
+        #expect(ManualProfileDraft.from(info, dns: .unavailable(reason: nil), ssid: .connected("HOME-AP")) == nil)
     }
 
     @Test("수동이어도 값이 덜 채워졌으면 제안하지 않는다")
     func hasNoSuggestionWhenIncomplete() {
         let info = InterfaceInfo(configMethod: .manual, ip: IPv4Address("192.0.2.10"))
-        #expect(ManualProfileDraft.from(info, dns: .servers([]), ssid: .connected("EXAMPLE-AP")) == nil)
+        #expect(ManualProfileDraft.from(info, dns: .unavailable(reason: nil), ssid: .connected("EXAMPLE-AP")) == nil)
     }
 
     // MARK: - 검증
