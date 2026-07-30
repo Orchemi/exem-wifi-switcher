@@ -273,8 +273,8 @@ check_parent_directory() {
 
      지금 할 수 있는 것:
        - Apple Silicon Mac 이나 Homebrew 가 /usr/local 을 쓰지 않는 Mac 에서 설치한다
-       - 또는 이 도구를 쓰지 않는다. 이 조합은 아직 지원하지 않습니다
-         (README '한계' 항목에 적어 두었습니다)"
+       - 또는 이 도구를 쓰지 않는다. 이 조합을 아직 지원하지 않는 이유는 여기에 적어
+         두었습니다: https://github.com/Orchemi/exem-wifi-switcher/blob/main/docs/guide.md#한계"
         fi
         die "$path 의 소유자가 root 가 아닙니다 (uid=$owner).
      이 상태에서는 권한 스크립트를 안전하게 놓을 수 없습니다.
