@@ -550,6 +550,88 @@ t_equals "1" "$?" "로그인 계정이 아닌 대상"
 "$REPO_ROOT/scripts/install.sh" --dry-run --yes >/dev/null 2>&1
 t_equals "0" "$?" "--yes 와 --dry-run"
 
+t_section "install.sh — 안내 문구가 들어온 길에 따라 갈린다"
+
+# 앱으로 설치하는 사람에게는 **레포도 swift 도 없다.** 그런데 [설치] 전에 읽는 마지막 화면은
+# 이 스크립트의 --dry-run 출력 전문이다. 거기에 `swift run …` 이 실리면 실행할 수 없는 명령을
+# '다음 할 일' 로 받는다 (README 는 "터미널을 쓰지 않는다" 를 앱의 전제로 내걸었다).
+app_output=$("$REPO_ROOT/scripts/install.sh" --dry-run --user "$(id -un)" 2>&1)
+repo_output=$("$REPO_ROOT/scripts/install.sh" --dry-run 2>&1)
+
+# '다음 할 일' 블록만 떼어 본다. sudoers 파일 내용에도 스크립트 이름이 들어 있어서,
+# 출력 전체를 보면 그 줄까지 같이 걸린다.
+next_block() { printf '%s\n' "$1" | awk '/^다음 할 일/,0'; }
+app_next=$(next_block "$app_output")
+repo_next=$(next_block "$repo_output")
+
+case "$app_next" in
+    *"swift run"*) t_fail "앱 계획 창에 실행할 수 없는 swift run 이 실립니다" ;;
+    *) t_pass ;;
+esac
+case "$app_next" in
+    *"./scripts/"*) t_fail "앱 계획 창이 레포 경로의 스크립트를 안내합니다" ;;
+    *) t_pass ;;
+esac
+case "$app_next" in
+    *"[저장]"*) t_pass ;;
+    *) t_fail "앱 경로의 다음 할 일이 설정 창에서 저장하라고 말하지 않습니다" ;;
+esac
+case "$app_next" in
+    *"[제거]"*) t_pass ;;
+    *) t_fail "앱 경로의 되돌리기가 설정 창의 [제거] 를 가리키지 않습니다" ;;
+esac
+
+# 레포에서 직접 실행한 사람에게는 그대로 남아야 한다 — 그 길에는 swift 가 있다.
+case "$repo_next" in
+    *"swift run exem-wifi-switcher-cli validate"*) t_pass ;;
+    *) t_fail "레포 경로의 다음 할 일에서 CLI 검증 안내가 사라졌습니다" ;;
+esac
+case "$repo_next" in
+    *"./scripts/uninstall.sh"*) t_pass ;;
+    *) t_fail "레포 경로의 되돌리기가 uninstall.sh 를 가리키지 않습니다" ;;
+esac
+
+# 손으로 config.json 을 고치는 길을 안내하면서 _readme 함정을 빼면,
+# 값을 고쳐도 앱이 무시하는 이유를 알 수 없다.
+case "$repo_next" in
+    *"_readme"*) t_pass ;;
+    *) t_fail "손으로 고치는 안내에 _readme 블록을 지우라는 말이 없습니다" ;;
+esac
+
+# 계획 본문의 '되돌리려면' 줄도 같은 기준으로 갈린다.
+case "$(printf '%s\n' "$app_output" | grep '^되돌리려면')" in
+    *"[제거]"*) t_pass ;;
+    *) t_fail "앱 경로의 계획이 앱에서 되돌리는 길을 말하지 않습니다" ;;
+esac
+case "$(printf '%s\n' "$repo_output" | grep '^되돌리려면')" in
+    *"./scripts/uninstall.sh"*) t_pass ;;
+    *) t_fail "레포 경로의 계획이 uninstall.sh 를 말하지 않습니다" ;;
+esac
+
+t_section "install.sh — 관리자 계정이 아니면 미리 말한다"
+
+# 비-admin 계정은 첫 sudo 에서 set -e 로 죽는다. 그때 남는 것은 sudo 자신의 메시지뿐이라
+# 원인도 다음 행동도 없다. 이 스크립트의 다른 실패는 전부 원인+대안을 주므로 이 자리만 어긋났다.
+if grep -q 'user_is_admin' "$REPO_ROOT/scripts/install.sh"; then t_pass; else
+    t_fail "install.sh 에 관리자 계정 사전 점검이 없습니다"
+fi
+if grep -q '관리자 계정이 아닙니다' "$REPO_ROOT/scripts/install.sh"; then t_pass; else
+    t_fail "관리자 계정이 아닐 때의 원인 문구가 없습니다"
+fi
+if grep -q '앱의 \[설치\] 버튼으로 관리자 이름·암호를 입력하세요' "$REPO_ROOT/scripts/install.sh"; then t_pass; else
+    t_fail "관리자 계정이 아닐 때의 대안(앱의 [설치])을 알려주지 않습니다"
+fi
+# 확인하려고 sudo 를 부르면 그 자리에서 암호를 묻거나 실패 기록이 남는다. 그룹 소속만 읽는다.
+if grep -q 'id -Gn' "$REPO_ROOT/scripts/install.sh"; then t_pass; else
+    t_fail "관리자 판정이 비파괴 수단(id -Gn)을 쓰지 않습니다"
+fi
+# 주석은 그 방식을 왜 쓰지 않는지 설명하는 자리라 세지 않는다 — 실제로 실행하는 줄만 본다.
+if grep -vE '^[[:space:]]*#' "$REPO_ROOT/scripts/install.sh" | grep -qE 'sudo -n -v'; then
+    t_fail "관리자 판정에 sudo 를 실행하는 방식이 들어 있습니다"
+else
+    t_pass
+fi
+
 t_section "install.sh — 번들 안에서도 같은 코드가 돈다"
 
 # 앱 번들은 레포 구조가 아니다. 설치할 원본을 **스크립트 자기 위치** 기준으로 찾지 못하면

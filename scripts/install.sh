@@ -178,6 +178,19 @@ if [ "$IS_ROOT" -eq 1 ]; then
      (그냥 실행하면 root 계정 앞으로 규칙이 적혀 아무 쓸모가 없습니다)"
     fi
 fi
+
+# 앱에서 들어왔는가. 안내 문구가 갈리는 기준이다.
+#
+# 앱으로 설치한 사람에게는 **레포도 swift 도 없다.** 그 사람이 [설치] 전에 읽는 마지막 화면은
+# 이 스크립트의 --dry-run 출력 전문이므로, 여기에 `swift run …` 이나 `./scripts/uninstall.sh` 를
+# 실으면 실행할 수 없는 명령을 '다음 할 일' 로 받는다.
+#   - 앱   : --user / --yes 로 들어온다 (계획 미리보기는 --dry-run --user, 실제 실행은 --yes --user)
+#   - 레포 : 아무것도 붙지 않는다
+INVOKED_FROM_APP=0
+if [ "$IS_ROOT" -eq 1 ] || [ "$ASSUME_YES" -eq 1 ] || [ -n "$USER_OVERRIDE" ]; then
+    INVOKED_FROM_APP=1
+fi
+
 TARGET_USER="${USER_OVERRIDE:-${SUDO_USER:-$(id -un)}}"
 case "$TARGET_USER" in
     ''|*[!a-zA-Z0-9._-]*) die "사용자 이름에 예상 밖의 문자가 있습니다: '$TARGET_USER'" ;;
@@ -189,6 +202,35 @@ esac
 # 시스템 계정(uid < 500)에는 규칙을 넣지 않는다. 로그인해서 쓰는 계정만 대상이다.
 if [ "$TARGET_UID" -lt 500 ]; then
     die "로그인 계정이 아닙니다: $TARGET_USER (uid=$TARGET_UID)"
+fi
+
+# 이 계정이 admin 그룹에 속하는가.
+#
+# `sudo` 를 실행해 보는 방식(`sudo -n -v`)은 쓰지 않는다 — 확인하려고 부른 명령이
+# 그 자리에서 암호를 묻거나 실패 기록을 남긴다. 그룹 소속은 아무것도 건드리지 않고 읽을 수 있다.
+user_is_admin() {
+    local name="$1" group
+    for group in $(id -Gn "$name" 2>/dev/null); do
+        [ "$group" = "admin" ] && return 0
+    done
+    return 1
+}
+
+# 관리자 계정이 아니면 첫 sudo 에서 죽는다. **그때는 sudo 자신의 메시지만 남는다** —
+# 원인도, 다음에 무엇을 하면 되는지도 없다. 이 스크립트의 다른 실패는 전부 원인과 대안을 주므로
+# 이 자리만 어긋나 있었다. 그래서 sudo 를 부르기 전에 미리 말한다.
+#
+# root 로 들어온 경우(앱의 [설치])는 볼 것이 없다 — 이미 인증을 거쳤다.
+if [ "$IS_ROOT" -eq 0 ] && ! user_is_admin "$(id -un)"; then
+    NOT_ADMIN_MESSAGE="관리자 계정이 아닙니다: $(id -un)
+     관리자 계정에서 실행하거나, 앱의 [설치] 버튼으로 관리자 이름·암호를 입력하세요.
+     (이 스크립트는 권한이 필요한 명령마다 sudo 로 승격합니다)"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        # 미리 보기는 sudo 를 쓰지 않으므로 끝까지 돈다. 다만 실제 설치는 막힐 자리다.
+        err "알림: $NOT_ADMIN_MESSAGE"
+    else
+        die "$NOT_ADMIN_MESSAGE"
+    fi
 fi
 
 # Homebrew 가 이 경로를 쓰고 있는가. (Intel Mac 의 Homebrew 는 /usr/local 을 사용자 소유로 바꾼다)
@@ -262,7 +304,9 @@ build_sudoers_content() {
     printf '%s\n' "#   인자  : 프로필 이름 형태 1개. 와일드카드(*)를 쓰지 않고 길이별 패턴을 나열한다"
     printf '%s\n' "#   사용자: $TARGET_USER"
     printf '%s\n' "#"
-    printf '%s\n' "# 이 파일은 scripts/install.sh 가 만들었고 scripts/uninstall.sh 로 완전히 지울 수 있다."
+    # 이 줄은 들어온 길에 따라 갈리지 않는다 — 앱으로 설치해도 터미널로 설치해도
+    # 같은 파일이 놓여야 한다. 그래서 두 길을 다 적는다.
+    printf '%s\n' "# 이 파일은 install.sh 가 만들었다. 앱 설정 창의 [제거] 또는 scripts/uninstall.sh 로 완전히 지울 수 있다."
     printf '%s\n' ""
     printf '%s\n' "Cmnd_Alias EXEM_WIFI_SWITCHER_APPLY = \\"
     while [ "$index" -le "$PROFILE_NAME_MAX_LENGTH" ]; do
@@ -280,6 +324,13 @@ build_sudoers_content() {
 }
 
 # --- 무엇을 할지 먼저 보여준다 ------------------------------------------------
+
+# 이 계획은 앱의 [설치] 창에 전문이 그대로 실린다. 그 사람이 닿을 수 있는 길만 적는다.
+if [ "$INVOKED_FROM_APP" -eq 1 ]; then
+    UNDO_HINT="설정 창의 권한 항목에서 [제거]"
+else
+    UNDO_HINT="./scripts/uninstall.sh"
+fi
 
 cat <<PLAN
 
@@ -331,7 +382,7 @@ cat <<PLAN
 $(build_sudoers_content)
 ---------------------------------------------------------------------------
 
-되돌리려면:  ./scripts/uninstall.sh
+되돌리려면:  $UNDO_HINT
 
 PLAN
 
@@ -460,14 +511,33 @@ else
     fi
 fi
 
-cat <<'NEXT'
+# 다음 할 일도 들어온 길에 따라 갈린다.
+#
+# 앱으로 온 사람에게 `swift run …` 을 건네면 안 된다 — 레포도 swift 도 없고,
+# README 가 내건 전제("터미널을 쓰지 않는다")와도 어긋난다.
+if [ "$INVOKED_FROM_APP" -eq 1 ]; then
+    cat <<'NEXT'
+
+다음 할 일
+  1. 설정 등록     설정 창에서 사내 Wi-Fi 이름·IP·서브넷 마스크·라우터·DNS 를 입력하고 [저장]
+                   (저장할 때 관리자 인증을 한 번 더 받습니다)
+  2. 확인          메뉴바 아이콘의 첫 줄이 '초기 설정하기' 에서 바뀌면 끝났습니다.
+                   설정 창의 권한 항목에서도 같은 상태를 볼 수 있습니다
+
+되돌리기         설정 창의 권한 항목에서 [제거]
+NEXT
+else
+    cat <<'NEXT'
 
 다음 할 일
   1. 설정 등록     앱을 실행해 설정 창에서 값을 입력하고 저장 (관리자 인증 1회)
                    터미널로 하려면: sudo nano /usr/local/etc/exem-wifi-switcher/config.json
+                   그때는 파일 안 "_readme" 블록을 지우세요 — 남아 있으면 앱이
+                   '아직 저장 안 됨' 으로 판정해 값을 쓰지 않습니다
   2. 설정 검증     swift run exem-wifi-switcher-cli validate
   3. 현재 상태     swift run exem-wifi-switcher-cli status
   4. 전환         swift run exem-wifi-switcher-cli apply <프로필이름>
 
 되돌리기         ./scripts/uninstall.sh
 NEXT
+fi
