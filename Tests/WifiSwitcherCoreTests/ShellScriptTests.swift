@@ -66,10 +66,23 @@ struct ShellScriptTests {
         #expect(result.succeeded)
     }
 
+    /// uninstall.sh --dry-run 이 실제로 지우지 않고도 과거형으로 "제거했습니다" 라고 말하지 않는지 본다.
+    /// **시스템을 건드리지 않는다** (실제 경로 대신 스크래치 디렉터리를 가리키는 사본에만 --dry-run 을 돌린다).
+    @Test("제거 스크립트 dry-run 검증이 전부 통과한다")
+    func uninstallDryRunSuitePasses() throws {
+        let script = RepositoryLayout.root.appendingPathComponent("Tests/shell/uninstall-dry-run.sh").path
+        let result = try run(["/bin/bash", script])
+        if !result.succeeded {
+            Issue.record("Tests/shell/uninstall-dry-run.sh 실패\n\(result.standardOutput)\n\(result.standardError)")
+        }
+        #expect(result.succeeded)
+    }
+
     @Test("스크립트에 문법 오류가 없다",
           arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh",
                       "scripts/build-app.sh", "scripts/package-release.sh",
-                      "Tests/shell/apply-tests.sh", "Tests/shell/version-gate.sh"])
+                      "Tests/shell/apply-tests.sh", "Tests/shell/version-gate.sh",
+                      "Tests/shell/uninstall-dry-run.sh"])
     func scriptsHaveValidSyntax(_ relativePath: String) throws {
         let path = RepositoryLayout.root.appendingPathComponent(relativePath).path
         let result = try run(["/bin/bash", "-n", path])
@@ -217,7 +230,7 @@ struct ShellScriptTests {
     @Test("스크립트에 사용자 홈 경로가 하드코딩돼 있지 않다",
           arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh", "scripts/build-app.sh",
                       "scripts/package-release.sh", "Tests/shell/apply-tests.sh",
-                      "Tests/shell/version-gate.sh"])
+                      "Tests/shell/version-gate.sh", "Tests/shell/uninstall-dry-run.sh"])
     func scriptsHaveNoHardcodedHomePath(_ relativePath: String) throws {
         // 문자열을 조립해서 만든다 — 이 파일 자신이 RULES.md 의 사전 점검 grep 에 걸리지 않도록.
         let homePrefix = "/" + "Users" + "/"

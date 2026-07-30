@@ -311,9 +311,9 @@ printf '      · 앱 번들(%s.app)을 지우면 macOS 가 함께 정리합니�
 heading "3/6  sudo 규칙"
 if [ -e "$SUDOERS_PATH" ]; then
     run_privileged /bin/rm -f "$SUDOERS_PATH"
-    printf '    제거했습니다: %s\n' "$SUDOERS_PATH"
-    # 규칙을 뺀 뒤에도 sudoers 전체가 정상인지 확인한다.
     if [ "$DRY_RUN" -eq 0 ]; then
+        printf '    제거했습니다: %s\n' "$SUDOERS_PATH"
+        # 규칙을 뺀 뒤에도 sudoers 전체가 정상인지 확인한다.
         if sudo visudo -c >/dev/null 2>&1; then
             printf '    남은 sudoers 검증 통과\n'
         else
@@ -330,7 +330,9 @@ heading "4/6  권한 스크립트"
 if [ -e "$LIBEXEC_DIR" ]; then
     # apply 와 save-config 가 이 디렉터리 안에 있다. 디렉터리째 지운다.
     run_privileged /bin/rm -rf "$LIBEXEC_DIR"
-    printf '    제거했습니다: %s (apply · save-config)\n' "$LIBEXEC_DIR"
+    if [ "$DRY_RUN" -eq 0 ]; then
+        printf '    제거했습니다: %s (apply · save-config)\n' "$LIBEXEC_DIR"
+    fi
 else
     printf '    없습니다\n'
 fi
@@ -342,7 +344,9 @@ if [ "$KEEP_CONFIG" -eq 1 ]; then
     printf '    남겨둡니다: %s\n' "$CONFIG_DIR"
 elif [ -e "$CONFIG_DIR" ]; then
     run_privileged /bin/rm -rf "$CONFIG_DIR"
-    printf '    제거했습니다: %s\n' "$CONFIG_DIR"
+    if [ "$DRY_RUN" -eq 0 ]; then
+        printf '    제거했습니다: %s\n' "$CONFIG_DIR"
+    fi
 else
     printf '    없습니다\n'
 fi
