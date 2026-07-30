@@ -54,9 +54,22 @@ struct ShellScriptTests {
         #expect(result.succeeded)
     }
 
+    /// 릴리즈 묶기의 버전 게이트 — 태그와 번들 버전이 어긋난 zip 을 막는지 본다.
+    /// **레포에 태그를 만들지 않는다** (값을 주입해 판정만 재고, 번들 버전은 가짜 plist 로 잰다).
+    @Test("릴리즈 버전 게이트 검증이 전부 통과한다")
+    func versionGateSuitePasses() throws {
+        let script = RepositoryLayout.root.appendingPathComponent("Tests/shell/version-gate.sh").path
+        let result = try run(["/bin/bash", script])
+        if !result.succeeded {
+            Issue.record("Tests/shell/version-gate.sh 실패\n\(result.standardOutput)\n\(result.standardError)")
+        }
+        #expect(result.succeeded)
+    }
+
     @Test("스크립트에 문법 오류가 없다",
           arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh",
-                      "scripts/build-app.sh", "scripts/package-release.sh"])
+                      "scripts/build-app.sh", "scripts/package-release.sh",
+                      "Tests/shell/apply-tests.sh", "Tests/shell/version-gate.sh"])
     func scriptsHaveValidSyntax(_ relativePath: String) throws {
         let path = RepositoryLayout.root.appendingPathComponent(relativePath).path
         let result = try run(["/bin/bash", "-n", path])
@@ -203,7 +216,8 @@ struct ShellScriptTests {
 
     @Test("스크립트에 사용자 홈 경로가 하드코딩돼 있지 않다",
           arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh", "scripts/build-app.sh",
-                      "scripts/package-release.sh", "Tests/shell/apply-tests.sh"])
+                      "scripts/package-release.sh", "Tests/shell/apply-tests.sh",
+                      "Tests/shell/version-gate.sh"])
     func scriptsHaveNoHardcodedHomePath(_ relativePath: String) throws {
         // 문자열을 조립해서 만든다 — 이 파일 자신이 RULES.md 의 사전 점검 grep 에 걸리지 않도록.
         let homePrefix = "/" + "Users" + "/"
