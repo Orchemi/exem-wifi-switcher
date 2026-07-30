@@ -60,6 +60,11 @@ docs/                    # 계획 문서
   옛 방식으로 되돌리지 마라** — 그러면 시스템 설정에서 '로그인 시 열기' 가 아니라
   '백그라운드에서 허용' 에 잡히고, 앱이 상태를 읽을 수 없어 macOS 가 꺼도 체크상자는 켜진 채가 된다
   (`Sources/WifiSwitcherCore/LoginItem.swift` 머리말에 근거를 적어 두었다)
+- **첫 관측 전에 `statusItem.isVisible = false` 로 상태 항목을 숨기지 마라** — `autosaveName` 이
+  기억해 둔 자리가 조용히 지워진다. 그러면 사용자가 ⌘-드래그로 옮겨 둔 아이콘이 다음 로그인에
+  왼쪽 끝(노치에 물리는 자리)으로 돌아가고, 사용자에게 고칠 방법이 남지 않는다.
+  **테스트로 잡히지 않는다** — 실측 근거는
+  `Sources/ExemWifiSwitcherApp/StatusItemController.swift` 의 `autosaveName` 자리 주석에 적어 두었다
 - **Xcode 없이 Command Line Tools만으로 빌드 가능해야 한다** — 소스를 읽고 직접 빌드하려는 사람의 진입장벽이다. SPM + 번들 조립 스크립트
 - **`.app` 번들 + `NSLocationWhenInUseUsageDescription` 필수** — 없으면 SSID 조회가 통째로 막힌다 (CoreWLAN만 동작, 위치 권한 필요)
 - **`sudoers` NOPASSWD 설계** — 권한 스크립트는 `root:wheel 0755`, 인자 화이트리스트 검증, 설치 시 `visudo -c` 검증 필수
