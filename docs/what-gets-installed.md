@@ -1,16 +1,16 @@
 # 설치되는 항목 전부
 
-무엇이 어디에 어떤 소유·권한으로 놓이는지, 그리고 제거해도 남는 것을 적었습니다.
+무엇이 어디에 어떤 소유·권한으로 설치되는지, 그리고 제거해도 남는 것을 적었습니다.
 
 [← README 로 돌아가기](../README.md) · [문서 목록](./index.md)
 
-이 도구는 `sudoers` 를 수정하고 로그인 항목을 등록합니다. 무엇이 어디에 놓이는지 숨기지 않습니다.
+이 도구는 `sudoers` 를 수정하고 로그인 항목을 등록합니다. 무엇이 어디에 설치되는지 숨기지 않습니다.
 
 | 경로 | 소유·권한 | 무엇 |
 |---|---|---|
 | `/usr/local/libexec/exem-wifi-switcher/` | `root:wheel 0755` | 아래 두 스크립트를 담는 디렉터리 |
 | `/usr/local/libexec/exem-wifi-switcher/apply` | `root:wheel 0755` | • `networksetup` 호출, **암호 없이 실행**<br>• 인자는 프로필 이름 1개, 화이트리스트 검증 |
-| `/usr/local/libexec/exem-wifi-switcher/save-config` | `root:wheel 0755` | • 설정 파일을 제자리에 놓습니다<br>• **암호 없이 실행되지 않습니다** |
+| `/usr/local/libexec/exem-wifi-switcher/save-config` | `root:wheel 0755` | • 설정 파일을 아래 `config.json` 경로에 저장합니다<br>• **암호 없이 실행되지 않습니다** |
 | `/etc/sudoers.d/exem-wifi-switcher` | `root:wheel 0440` | • `apply` 만 암호 없이 허용합니다<br>• 와일드카드 없이 인자 패턴을 길이별로 고정 |
 | `/usr/local/etc/exem-wifi-switcher/` | `root:wheel 0755` | 설정 디렉터리 |
 | `/usr/local/etc/exem-wifi-switcher/config.json` | `root:wheel 0644` | 사용자 설정. 사내 IP 값이 여기에만 저장되고 저장소에는 올라가지 않습니다 |
@@ -26,15 +26,15 @@
 이미 있으면 건드리지 않습니다.
 
 이미 설정 파일이 있으면 **내용은 그대로 두고 소유와 권한만 위 값으로 맞춥니다.**
-(예전 버전은 `root:admin 0664` 로 놓았습니다. 그 상태에서는 admin 그룹의 아무 프로세스나 값을 바꿀 수 있습니다)
+(예전 버전은 `root:admin 0664` 로 설치했습니다. 그 상태에서는 admin 그룹의 아무 프로세스나 값을 바꿀 수 있습니다)
 
-앱 자체(`EXEM Wifi Switcher.app`)는 두신 자리에 그대로 있습니다. 설치가 앱을 옮기지 않습니다.
+앱 자체(`EXEM Wifi Switcher.app`)는 설치하신 폴더에 그대로 있습니다. 설치가 앱을 옮기지 않습니다.
 
 ## 앱의 설치 버튼이 실행하는 것
 
 앱의 **[설치]** 버튼이 실행하는 것은 이 저장소의 [`scripts/install.sh`](../scripts/install.sh) 그대로입니다.
 앱 번들 안(`Contents/Resources/scripts/`)에 같은 파일이 들어 있어서, 터미널로 설치한 사람과
-앱으로 설치한 사람의 결과가 갈라지지 않습니다.
+앱으로 설치한 사람의 결과가 같습니다.
 
 누르기 전에 보여주는 목록도 앱이 지어낸 것이 아니라, 그 스크립트가 `--dry-run` 으로 내놓은 내용 그대로입니다.
 
