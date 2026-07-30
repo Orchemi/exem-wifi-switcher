@@ -78,11 +78,23 @@ struct ShellScriptTests {
         #expect(result.succeeded)
     }
 
+    /// docs/*.md 를 Wiki 페이지로 발행하는 변환·유출 점검을 검증한다.
+    /// **네트워크를 쓰지 않고, Wiki 에 아무것도 밀지 않는다** (가짜 저장소에 --output 또는 --dry-run 으로만 돌린다).
+    @Test("위키 발행 스크립트 검증이 전부 통과한다")
+    func publishWikiSuitePasses() throws {
+        let script = RepositoryLayout.root.appendingPathComponent("Tests/shell/publish-wiki.sh").path
+        let result = try run(["/bin/bash", script])
+        if !result.succeeded {
+            Issue.record("Tests/shell/publish-wiki.sh 실패\n\(result.standardOutput)\n\(result.standardError)")
+        }
+        #expect(result.succeeded)
+    }
+
     @Test("스크립트에 문법 오류가 없다",
           arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh",
-                      "scripts/build-app.sh", "scripts/package-release.sh",
+                      "scripts/build-app.sh", "scripts/package-release.sh", "scripts/publish-wiki.sh",
                       "Tests/shell/apply-tests.sh", "Tests/shell/version-gate.sh",
-                      "Tests/shell/uninstall-dry-run.sh"])
+                      "Tests/shell/uninstall-dry-run.sh", "Tests/shell/publish-wiki.sh"])
     func scriptsHaveValidSyntax(_ relativePath: String) throws {
         let path = RepositoryLayout.root.appendingPathComponent(relativePath).path
         let result = try run(["/bin/bash", "-n", path])
@@ -229,8 +241,9 @@ struct ShellScriptTests {
 
     @Test("스크립트에 사용자 홈 경로가 하드코딩돼 있지 않다",
           arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh", "scripts/build-app.sh",
-                      "scripts/package-release.sh", "Tests/shell/apply-tests.sh",
-                      "Tests/shell/version-gate.sh", "Tests/shell/uninstall-dry-run.sh"])
+                      "scripts/package-release.sh", "scripts/publish-wiki.sh", "Tests/shell/apply-tests.sh",
+                      "Tests/shell/version-gate.sh", "Tests/shell/uninstall-dry-run.sh",
+                      "Tests/shell/publish-wiki.sh"])
     func scriptsHaveNoHardcodedHomePath(_ relativePath: String) throws {
         // 문자열을 조립해서 만든다 — 이 파일 자신이 RULES.md 의 사전 점검 grep 에 걸리지 않도록.
         let homePrefix = "/" + "Users" + "/"
