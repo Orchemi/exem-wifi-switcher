@@ -94,8 +94,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private var permissionReport: PermissionReport?
     /// 마지막으로 시작한 권한 읽기. 겹쳐 들어온 읽기 중 이 번호의 결과만 화면에 옮긴다.
     private var permissionReadToken = 0
-    /// 설치된 것을 되돌리는 손잡이. 항목별 조치가 아니라 섹션 전체에 걸리므로 머리말 옆에 둔다.
-    private let uninstallButton = NSButton(title: "제거…", target: nil, action: nil)
+    /// 설치한 것을 되돌리고 **앱 번들까지 휴지통으로 보내는** 손잡이.
+    ///
+    /// 권한 머리말 옆의 작은 [제거…] 였을 때는 하는 일이 설치물 정리뿐이었고, 누른 사람에게
+    /// 앱을 지웠다는 느낌이 남지 않았다. 이름을 키운 만큼 하는 일도 키웠으므로
+    /// (`AppRemoval`) 자리도 창 전체에 걸리는 파괴적 동작의 자리, 곧 **아래쪽 왼편**으로 옮긴다.
+    /// 보이는 조건은 그대로다 (설치된 것이 있을 때만).
+    private let removeAppButton = NSButton(title: AppRemoval.footerButtonTitle, target: nil, action: nil)
     /// 설치·제거가 도는 동안 같은 일을 두 번 걸지 않는다.
     private var isRunningInstaller = false
 
@@ -490,9 +495,30 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             row.button.tag = index
         }
         renderSSIDPermissionButton(report.item(.location))
-        uninstallButton.isHidden = !report.canUninstall
-        uninstallButton.isEnabled = !isRunningInstaller
+        // 지울 것이 있을 때만 선다. 판정은 권한 표와 같은 자리에서 온다 (`canUninstall`).
+        removeAppButton.isHidden = !report.canUninstall
+        setRemoveAppButtonEnabled(!isRunningInstaller)
         window?.setContentSize(window?.contentView?.fittingSize ?? NSSize(width: Self.windowWidth, height: 320))
+    }
+
+    /// 빨간 글자는 직접 칠한 것이라 **꺼졌을 때 흐려지는 것도 직접 해야 한다** —
+    /// 그러지 않으면 누를 수 없는 동안에도 평소와 똑같이 선명하게 서 있다.
+    private func setRemoveAppButtonEnabled(_ enabled: Bool) {
+        removeAppButton.isEnabled = enabled
+        applyRemoveAppButtonTitle(enabled: enabled)
+    }
+
+    private func applyRemoveAppButtonTitle(enabled: Bool) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        removeAppButton.attributedTitle = NSAttributedString(
+            string: AppRemoval.footerButtonTitle,
+            attributes: [
+                .foregroundColor: enabled ? NSColor.systemRed : NSColor.systemRed.withAlphaComponent(0.4),
+                .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
+                .paragraphStyle: paragraph,
+            ]
+        )
     }
 
     /// Wi-Fi 이름 칸 옆의 권한 버튼. **판정은 권한 표에서 그대로 가져온다** —
@@ -557,7 +583,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         }
     }
 
-    @objc private func performUninstall() {
+    @objc private func performAppRemoval() {
         beginInstaller(.uninstall)
     }
 
@@ -622,13 +648,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         alert.alertStyle = .informational
         alert.messageText = operation == .install
             ? "전환 권한을 설치합니다"
-            : "설치한 항목을 제거합니다"
+            : AppRemoval.confirmationTitle
         alert.informativeText = operation == .install
             ? "관리자 인증을 한 번 받습니다. 아래가 설치할 내용 전부입니다."
-            : "관리자 인증을 한 번 받습니다. 아래 항목을 지웁니다 — 입력한 네트워크 값도 함께 지워집니다."
-        alert.accessoryView = InstallPlanView.make(preview.plan)
+            : AppRemoval.confirmationBody
+        // 제거 계획에는 앱이 한 줄을 덧붙인다. 스크립트는 "앱 번들은 직접 지우세요" 라고 적는데,
+        // 이 창에서 부르는 길에서는 앱이 번들까지 휴지통으로 옮기므로 그 말이 거짓이 된다
+        // (`AppRemoval.planAddendum` — 스크립트는 고치지 않는다. 터미널에서는 여전히 참이다).
+        alert.accessoryView = InstallPlanView.make(
+            operation == .install ? preview.plan : AppRemoval.plan(preview.plan)
+        )
 
-        let confirmButton = alert.addButton(withTitle: operation.title)
+        let confirmButton = alert.addButton(
+            withTitle: operation == .install ? operation.title : AppRemoval.confirmButtonTitle
+        )
         if operation == .uninstall { confirmButton.hasDestructiveAction = true }
         alert.addButton(withTitle: "취소")
         // 앱에서 하는 설치가 막혔을 때의 출구. 기본 동선은 위 버튼이다.
@@ -655,16 +688,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         finishInstaller()
         refreshPermissions()
 
+        // 삭제는 스크립트가 끝난 뒤에도 할 일이 남는다 (번들을 휴지통으로 옮기고 종료한다).
+        if operation == .uninstall {
+            completeAppRemoval(result)
+            return
+        }
+
         switch result {
         case .success:
-            if operation == .uninstall {
-                // 로그인 항목은 이제 macOS 가 들고 있어 셸 스크립트가 끌 수 없다 (파일이 아니다).
-                // 제거했는데 다음 로그인에 또 뜨는 일이 없도록 **앱이 여기서 끈다.**
-                // 터미널로 제거한 사람을 위한 안내는 uninstall.sh 가 그 자리에서 말한다.
-                try? LoginItem.disable()
-                showLoginItemState()
-            }
-            presentInstallerSuccess(operation)
+            presentInstallSuccess()
         case .cancelled:
             // 취소는 실패가 아니다. 아무것도 바뀌지 않았다는 사실만 알린다.
             let alert = NSAlert()
@@ -691,29 +723,104 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         }
     }
 
-    private func presentInstallerSuccess(_ operation: BundledInstaller.Operation) {
+    /// 설치가 끝났을 때. **삭제는 여기로 오지 않는다** (`completeAppRemoval`).
+    private func presentInstallSuccess() {
         // **권한을 다 갖춘 이 순간이 사람을 놓치는 자리다.** 설치가 끝나면 끝난 것처럼 느껴지는데
         // 값은 아직 설정 파일에 없다 (사내에서는 칸이 저절로 차 있어 더 그렇게 보인다).
         // 그래서 여기서 남은 한 걸음을 말하고, **그 자리에서 저장까지 갈 수 있게** 한다.
-        if operation == .install, canSave {
+        if canSave {
             offerSaveAfterInstall()
             return
         }
 
         let alert = NSAlert()
         alert.alertStyle = .informational
-        switch operation {
-        case .install:
-            alert.messageText = "설치했습니다"
-            alert.informativeText = "이제 프로필을 전환할 때 암호를 묻지 않습니다. "
-                + "설정 값을 저장할 때는 관리자 인증을 한 번 받습니다."
-        case .uninstall:
-            alert.messageText = "제거했습니다"
-            alert.informativeText = "전환·저장 권한과 설정을 지웠습니다. 앱은 계속 실행 중입니다 — "
-                + "앱 자체를 지우려면 \(InstallPaths.appName).app 을 직접 지우세요."
-        }
+        alert.messageText = "설치했습니다"
+        alert.informativeText = "이제 프로필을 전환할 때 암호를 묻지 않습니다. "
+            + "설정 값을 저장할 때는 관리자 인증을 한 번 받습니다."
         alert.addButton(withTitle: "확인")
         show(alert)
+    }
+
+    // MARK: - 앱 삭제
+
+    /// 제거 스크립트가 끝난 뒤. **여기서 앱이 자기 번들을 처분한다.**
+    ///
+    /// 설치물을 지우는 것은 전부 `scripts/uninstall.sh` 가 한다 (그 절차를 여기서 흉내 내지
+    /// 않는다). 스크립트가 할 수 없는 것이 하나 남는데, 사용자가 둔 자리에 있는 앱 번들이다.
+    /// 그 하나만 앱이 맡는다 — 옮기는 것도 지우는 것이 아니라 **휴지통으로 보내는 것**이라
+    /// 잘못 눌러도 되돌릴 수 있다.
+    ///
+    /// 무엇을 말할지는 `AppRemoval` 이 정한다. 두 단계가 각각 실패할 수 있어
+    /// **한 일과 다른 말을 하기 가장 쉬운 자리**이기 때문이다.
+    private func completeAppRemoval(_ result: ConfigInstaller.AuthorizationResult) {
+        switch result {
+        case .cancelled:
+            present(AppRemoval.message(for: .cancelled))
+        case .failed(let message):
+            // 스크립트가 멈춘 자리다. 번들은 건드리지 않는다.
+            present(AppRemoval.message(for: .scriptFailed(reason: message)))
+        case .success:
+            // 로그인 항목은 macOS 가 들고 있어 셸 스크립트가 끌 수 없다 (파일이 아니다).
+            // 번들을 지우면 macOS 가 함께 정리하지만, 휴지통 이동이 실패해 앱이 남는 길도 있다.
+            // 그때 다음 로그인에 다시 뜨지 않도록 **여기서 먼저 끈다.**
+            try? LoginItem.disable()
+            showLoginItemState()
+            moveAppBundleToTrash()
+        }
+    }
+
+    /// 실행 중인 자기 번들을 휴지통으로 옮긴다.
+    ///
+    /// 경로는 `Bundle.main.bundleURL` 에서 온다 — 문자열로 조립하지 않는다.
+    /// `rm` 을 쓰지 않는 이유는 하나다: 되돌릴 수 없다.
+    private func moveAppBundleToTrash() {
+        let bundleURL = Bundle.main.bundleURL
+        NSWorkspace.shared.recycle([bundleURL]) { [weak self] _, error in
+            Task { @MainActor in
+                guard let self else { return }
+                if let error {
+                    // 읽기 전용 볼륨·남의 계정 소유·`/Applications` 권한 등. 삼키지 않는다.
+                    self.present(AppRemoval.message(for: .appBundleRemains(
+                        path: PathDisplay.abbreviate(bundleURL.path),
+                        reason: error.localizedDescription
+                    )), revealing: bundleURL)
+                    return
+                }
+                self.present(AppRemoval.message(for: .removed))
+            }
+        }
+    }
+
+    /// 삭제 결과를 옮겨 적는다. 어떤 버튼을 둘지도 `AppRemoval.Message` 가 이미 답해 두었다.
+    private func present(_ message: AppRemoval.Message, revealing bundleURL: URL? = nil) {
+        let alert = NSAlert()
+        alert.alertStyle = message.isWarning ? .warning : .informational
+        alert.messageText = message.title
+        alert.informativeText = message.body
+        alert.addButton(withTitle: "확인")
+        if message.offersFinderReveal { alert.addButton(withTitle: "Finder 에서 보기") }
+        if message.offersTerminalCommand { alert.addButton(withTitle: "터미널 명령 복사") }
+
+        let terminalCommand = BundledInstaller.terminalCommand(
+            scriptPath: InstallerService.scriptPath(for: .uninstall)
+        )
+        show(alert) { [weak self] response in
+            if response == .alertSecondButtonReturn {
+                if message.offersFinderReveal, let bundleURL {
+                    NSWorkspace.shared.activateFileViewerSelecting([bundleURL])
+                } else if message.offersTerminalCommand {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(terminalCommand, forType: .string)
+                }
+                return
+            }
+            guard message.quitsAfterConfirmation else { return }
+            // 앱을 지웠다고 말한 뒤에도 창이 남아 있으면 지운 것이 아니게 된다.
+            // 나가는 길에 "저장하지 않고 닫을까요" 를 묻지 않는다 (저장할 자리를 방금 지웠다).
+            self?.skipsUnsavedPrompt = true
+            NSApp.terminate(nil)
+        }
     }
 
     /// 설치 직후, 아직 저장되지 않은 값이 화면에 있을 때.
@@ -761,7 +868,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     private func setInstallerControlsEnabled(_ enabled: Bool) {
-        uninstallButton.isEnabled = enabled
+        setRemoveAppButtonEnabled(enabled)
         for row in permissionRows.values { row.button.isEnabled = enabled }
     }
 
@@ -1108,15 +1215,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         let permissionTitle = NSTextField(labelWithString: "권한")
         permissionTitle.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
 
-        // 제거는 항목 하나의 조치가 아니라 설치한 것 전체를 되돌리는 일이라 머리말 옆에 둔다.
-        uninstallButton.bezelStyle = .rounded
-        uninstallButton.controlSize = .small
-        uninstallButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        uninstallButton.target = self
-        uninstallButton.action = #selector(performUninstall)
-        uninstallButton.isHidden = true
-
-        let permissionHeader = NSStackView(views: [permissionTitle, NSView(), uninstallButton])
+        // 여기에는 [제거…] 가 있었다. 지금은 창 아래쪽 왼편의 [앱 삭제…] 하나로 합쳤다 —
+        // 두 손잡이가 나란히 있으면 무엇이 다른지 알 수 없다.
+        let permissionHeader = NSStackView(views: [permissionTitle, NSView()])
         permissionHeader.orientation = .horizontal
         permissionHeader.alignment = .firstBaseline
         permissionHeader.distribution = .fill
@@ -1161,8 +1262,25 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         buttons.spacing = 10
         buttons.alignment = .firstBaseline
 
-        let buttonRow = NSStackView(views: [NSView(), buttons])
+        // 파괴적 동작이라는 것은 보이되 **기본 버튼([저장])보다 앞서면 안 된다.**
+        // 빨간 배경(`bezelColor`)을 주면 채워진 버튼이 되어 이 창에서 가장 먼저 눈에 들어온다 —
+        // 평소에 누를 것은 [저장] 이고 이 버튼은 한 번 누르고 끝나는 것이라 순서가 뒤집힌다.
+        // 그래서 테두리는 다른 버튼과 같은 것을 쓰고 **글자만 빨갛게** 한다 (macOS 관례).
+        // 위계는 자리가 만든다: 저장·취소와 반대쪽 끝에 홀로 선다.
+        removeAppButton.bezelStyle = .rounded
+        removeAppButton.hasDestructiveAction = true
+        removeAppButton.target = self
+        removeAppButton.action = #selector(performAppRemoval)
+        removeAppButton.toolTip = "설치한 항목을 지우고 앱을 휴지통으로 옮깁니다."
+        removeAppButton.isHidden = true
+        applyRemoveAppButtonTitle(enabled: true)
+
+        // 두 무리를 양 끝으로 벌린다. 늘어나는 것은 사이의 빈 자리 하나뿐이다.
+        let footerSpacer = NSView()
+        footerSpacer.setContentHuggingPriority(.defaultLow - 1, for: .horizontal)
+        let buttonRow = NSStackView(views: [removeAppButton, footerSpacer, buttons])
         buttonRow.orientation = .horizontal
+        buttonRow.alignment = .centerY
         buttonRow.distribution = .fill
 
         let stack = NSStackView(views: [

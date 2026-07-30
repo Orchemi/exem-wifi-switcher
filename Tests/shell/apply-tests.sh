@@ -577,8 +577,8 @@ case "$app_next" in
     *) t_fail "앱 경로의 다음 할 일이 설정 창에서 저장하라고 말하지 않습니다" ;;
 esac
 case "$app_next" in
-    *"[제거]"*) t_pass ;;
-    *) t_fail "앱 경로의 되돌리기가 설정 창의 [제거] 를 가리키지 않습니다" ;;
+    *"[앱 삭제]"*) t_pass ;;
+    *) t_fail "앱 경로의 되돌리기가 설정 창의 [앱 삭제] 를 가리키지 않습니다" ;;
 esac
 
 # 레포에서 직접 실행한 사람에게는 그대로 남아야 한다 — 그 길에는 swift 가 있다.
@@ -600,7 +600,7 @@ esac
 
 # 계획 본문의 '되돌리려면' 줄도 같은 기준으로 갈린다.
 case "$(printf '%s\n' "$app_output" | grep '^되돌리려면')" in
-    *"[제거]"*) t_pass ;;
+    *"[앱 삭제]"*) t_pass ;;
     *) t_fail "앱 경로의 계획이 앱에서 되돌리는 길을 말하지 않습니다" ;;
 esac
 case "$(printf '%s\n' "$repo_output" | grep '^되돌리려면')" in

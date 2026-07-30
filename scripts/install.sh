@@ -306,7 +306,7 @@ build_sudoers_content() {
     printf '%s\n' "#"
     # 이 줄은 들어온 길에 따라 갈리지 않는다 — 앱으로 설치해도 터미널로 설치해도
     # 같은 파일이 놓여야 한다. 그래서 두 길을 다 적는다.
-    printf '%s\n' "# 이 파일은 install.sh 가 만들었다. 앱 설정 창의 [제거] 또는 scripts/uninstall.sh 로 완전히 지울 수 있다."
+    printf '%s\n' "# 이 파일은 install.sh 가 만들었다. 앱 설정 창의 [앱 삭제] 또는 scripts/uninstall.sh 로 완전히 지울 수 있다."
     printf '%s\n' ""
     printf '%s\n' "Cmnd_Alias EXEM_WIFI_SWITCHER_APPLY = \\"
     while [ "$index" -le "$PROFILE_NAME_MAX_LENGTH" ]; do
@@ -327,7 +327,7 @@ build_sudoers_content() {
 
 # 이 계획은 앱의 [설치] 창에 전문이 그대로 실린다. 그 사람이 닿을 수 있는 길만 적는다.
 if [ "$INVOKED_FROM_APP" -eq 1 ]; then
-    UNDO_HINT="설정 창의 권한 항목에서 [제거]"
+    UNDO_HINT="설정 창 아래의 [앱 삭제] (앱 자체도 휴지통으로 갑니다)"
 else
     UNDO_HINT="./scripts/uninstall.sh"
 fi
@@ -524,7 +524,7 @@ if [ "$INVOKED_FROM_APP" -eq 1 ]; then
   2. 확인          메뉴바 아이콘의 첫 줄이 '초기 설정하기' 에서 바뀌면 끝났습니다.
                    설정 창의 권한 항목에서도 같은 상태를 볼 수 있습니다
 
-되돌리기         설정 창의 권한 항목에서 [제거]
+되돌리기         설정 창 아래의 [앱 삭제] (앱 자체도 휴지통으로 갑니다)
 NEXT
 else
     cat <<'NEXT'
