@@ -12,7 +12,9 @@ import WifiSwitcherCore
 @MainActor
 final class StatusItemController: NSObject, NSMenuDelegate {
 
-    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    /// **`init()` 안에서 만든다.** 상태 항목은 태어나는 순간 저장된 자리를 읽으므로,
+    /// 자리를 심는 일이 그보다 먼저 끝나야 한다 (아래 `init()` 참조).
+    private let statusItem: NSStatusItem
     private let menu = NSMenu()
     private let probe = SystemProbe()
     private let notifier = SwitchNotifier()
@@ -74,10 +76,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// **한 번 정하면 바꾸지 마라.** macOS 는 이 이름으로 `UserDefaults` 에
     /// `NSStatusItem Preferred Position <이름>` 을 적어 둔다 — 이름을 바꾸면 사용자가 옮겨 둔 자리를
     /// 통째로 잃고 아이콘이 다시 왼쪽 끝(노치 자리)으로 돌아간다.
-    private static let statusItemAutosaveName = "status-item"
+    ///
+    /// `--diagnose` 도 이 이름으로 자리를 찾는다 (`Diagnostics.menuBarSeat`) — 두 벌로 적어 두면
+    /// 한쪽만 바뀐 채 진단이 엉뚱한 열쇠를 읽는다.
+    static let statusItemAutosaveName = "status-item"
 
     override init() {
         autoSwitchEnabled = AutoSwitchPreferences.isEnabled(in: UserDefaults.standard)
+        // 자리를 먼저 심고 항목을 만든다 — 순서를 뒤집으면 항목은 이미 놓인 뒤라 값을 읽지 않는다.
+        //
+        // 심는 것은 **저장된 자리가 없고 화면에 노치가 있을 때뿐이다** (`StatusItemSeat.seedPosition`).
+        // 사용자가 옮겨 둔 자리는 손대지 않는다.
+        MenuBarSeat.seedIfNeeded(autosaveName: Self.statusItemAutosaveName, store: UserDefaults.standard)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
         menu.delegate = self
         menu.autoenablesItems = false
@@ -91,6 +102,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         //
         // 이 이름을 붙이면 ⌘ 를 누른 채 아이콘을 오른쪽(시계 쪽)으로 한 번 끌어 두는 것으로 끝난다.
         // 메뉴 막대 오른쪽은 노치에 닿지 않는다.
+        //
+        // **다만 이 이름은 사용자가 한 번 옮긴 뒤에야 듣는다.** 옮기기 전까지는 매번 노치 자리라서,
+        // 위에서 첫 자리를 미리 심어 둔다 (`MenuBarSeat.seedIfNeeded`).
         //
         // **`isVisible = false` 로 항목을 숨겼다 켜면 이 기억이 지워진다.** 실측으로 갈라 본 자리다 —
         // 자리를 심어 두고 띄웠을 때, 켠 채로 시작하면 그 자리에 놓였고(x=1097 · 저장값 남음),
@@ -132,13 +146,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             }
         }
 
-        // 아이콘이 노치나 메뉴 막대 밖으로 밀려 보이지 않으면 한 번 알린다.
-        //
-        // `autosaveName` 으로 자리를 기억시켜 두었지만, 그것은 **사용자가 한 번 옮겨 둔 뒤에야** 듣는다.
-        // 옮기기 전까지 아이콘은 왼쪽 끝 — 노치에 물리는 자리 — 에 놓이고, 그 상태에서는 앱에 손댈
-        // 방법이 남지 않는다. 그래서 옮기라고 말해 주는 자리가 하나 필요하다.
+        // 심어 둔 자리로도 아이콘이 가려질 수 있다 (앞선 항목이 많으면 심은 자리가 이미 차 있다).
+        // 그때는 한 번 더 오른쪽으로 밀어 보고, 그래도 안 되면 옮기라고 말한다.
         let watch = MenuBarVisibilityWatch(
             statusItem: statusItem,
+            autosaveName: Self.statusItemAutosaveName,
             store: preferenceStore,
             announce: { [weak self] message in self?.notifier.post(message) }
         )

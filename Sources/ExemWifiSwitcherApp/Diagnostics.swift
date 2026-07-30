@@ -55,6 +55,7 @@ enum Diagnostics {
         lines.append("설정 파일      \(text(for: observation.config))")
         lines.append("현재 구성      \(currentConfiguration(observation))")
         lines.append("자동 전환 판정  \(decision(observation, enabled: enabled))")
+        lines.append("메뉴바 아이콘  \(menuBarSeat())")
 
         print(lines.joined(separator: "\n"))
     }
@@ -97,6 +98,25 @@ enum Diagnostics {
         }
         done.wait()
         return box.value
+    }
+
+    /// 메뉴 막대 아이콘이 어디 있고 보이는가.
+    ///
+    /// **지금 좌표는 잴 수 없다.** 이 경로는 `NSApplication` 을 띄우지 않아 상태 항목이 없고
+    /// (`main.swift`), 따로 돌고 있는 앱에게 물어볼 길도 없다. 그래서 지어내지 않고 **그 앱이
+    /// 마지막으로 재서 남긴 것**을 말한다. 없는 값을 채우느니 없다고 적는 편이 낫다 —
+    /// 이 줄이 없어서 오너는 접근성 API 를 손으로 두드려야 했다.
+    ///
+    /// 노치 유무만은 지금 잰다. `NSScreen` 은 앱 없이도 읽히고, 아이콘이 왜 가려졌는지는
+    /// 대개 그 한 가지로 설명된다.
+    private static func menuBarSeat() -> String {
+        let store = UserDefaults.standard
+        let hasNotch = NSScreen.main.map { $0.auxiliaryTopLeftArea != nil && $0.auxiliaryTopRightArea != nil }
+        return MenuBarSeatReport.text(
+            lastKnownHidden: HiddenIconNotice.lastKnownHidden(in: store),
+            state: StatusItemSeat.state(autosaveName: StatusItemController.statusItemAutosaveName, in: store),
+            hasNotch: hasNotch
+        )
     }
 
     /// `SCDynamicStore` 에 실제로 붙을 수 있는지 확인한다. 붙였다가 곧바로 뗀다.
