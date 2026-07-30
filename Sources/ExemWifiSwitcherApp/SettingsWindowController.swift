@@ -1127,10 +1127,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         loginItemCheckbox.target = self
         loginItemCheckbox.action = #selector(toggleLoginItem(_:))
 
-        // 이 체크상자는 `~/Library/LaunchAgents` 에 항목을 놓을 뿐이고, **켜고 끄는 최종 권한은
-        // macOS 에 있다** — 시스템 설정의 로그인 항목에서 꺼 버리면 로그인해도 뜨지 않는다.
-        // 앱은 그 상태를 읽을 수 없으므로(서명 인증서가 없어 `SMAppService` 를 못 쓴다)
-        // 체크상자는 계속 '켜짐' 으로 보인다. 확인하러 갈 자리를 옆에 둔다.
+        // 이 체크상자는 `SMAppService.mainApp` 으로 앱 자신을 로그인 항목에 올린다.
+        // ad-hoc 서명으로도 등록된다 — 근거는 `LoginItem.swift` 머리말에 적어 두었다.
+        //
+        // **켜고 끄는 최종 권한은 macOS 에 있다** — 시스템 설정의 로그인 항목에서 꺼 버리면
+        // 로그인해도 뜨지 않는다. 그 상태는 앱이 읽을 수 있으므로(`.blockedBySystem`)
+        // 체크상자 아래에 "macOS 가 이 항목을 꺼 두었습니다" 를 적고, 그 화면으로 나갈 자리를 옆에 둔다.
         loginItemSettingsButton.bezelStyle = .rounded
         loginItemSettingsButton.controlSize = .small
         loginItemSettingsButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)

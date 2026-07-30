@@ -46,7 +46,11 @@ public enum InstallPaths {
     /// 번들 식별자. 위치 권한(TCC)이 이 값에 귀속된다 — 바꾸면 승인을 다시 받아야 한다.
     public static let bundleIdentifier = "com.horbis.exem-wifi-switcher"
 
-    /// 로그인 항목(LaunchAgent) 라벨. `scripts/uninstall.sh` 가 같은 값을 지운다.
+    /// **0.1.0 이전** 로그인 항목(LaunchAgent)의 라벨. 지금 켜고 끄는 데는 쓰지 않는다.
+    ///
+    /// 로그인 항목은 `SMAppService.mainApp` 이 들고 있고 놓이는 파일이 없다 (`LoginItem.swift`).
+    /// 이 값이 남아 있는 이유는 **옛 방식으로 켜 두었던 사람의 흔적을 걷어내는 것** 하나뿐이다 —
+    /// `LoginItem.migrateLegacyAgent()` 와 `scripts/uninstall.sh` 가 같은 값으로 그 plist 를 지운다.
     public static let agentLabel = bundleIdentifier + ".agent"
 
     // MARK: - 번들이 품는 설치 스크립트

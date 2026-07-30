@@ -3,7 +3,8 @@ import Foundation
 /// 앱이 기억해 두는 켜짐/꺼짐 값 하나를 담는 곳.
 ///
 /// 앱에서는 `UserDefaults`, 테스트에서는 메모리에 담는다. 설정 파일(`config.json`)에 두지 않는 이유는
-/// 그 파일이 `root:admin` 소유라 저장할 때마다 권한이 필요하고, 이 값들은 기기·사용자별 취향이기 때문이다.
+/// 그 파일이 `root:wheel 0644` 라 저장할 때마다 관리자 인증이 필요하고, 이 값들은 기기·사용자별
+/// 취향이기 때문이다 — 체크상자를 누를 때마다 암호를 물을 이유가 없다.
 ///
 /// 자동 전환 on/off 와 '아이콘이 가려졌더라' 는 지난 기억(`HiddenIconNotice`)이 이 문을 함께 쓴다.
 public protocol FlagStore: AnyObject {
