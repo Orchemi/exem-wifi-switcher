@@ -13,6 +13,8 @@
 
 ## 설치
 
+<p align="center"><a href="https://github.com/Orchemi/exem-wifi-switcher/releases/latest/download/EXEM-Wifi-Switcher.zip"><img src="docs/assets/download-button.svg" width="214" height="60" alt="최신 버전 내려받기. 누르면 앱 zip 파일을 바로 내려받습니다." /></a><br><sub>macOS 13 이상 · 바뀐 내용과 SHA-256 은 <a href="https://github.com/Orchemi/exem-wifi-switcher/releases/latest">릴리즈 노트</a>에 있습니다.</sub></p>
+
 > [!WARNING]
 > **앱을 처음 열면 macOS 가 한 번 막습니다.** 이 앱이 Apple 의 공증(notarization)을 받지 않았기 때문이고, 앱에 문제가 있어서가 아닙니다.
 >
@@ -24,14 +26,10 @@
 - **앱을 처음 열면 위치 권한 창이 먼저 뜹니다.**
 - Intel Mac에서 Homebrew가 `/usr/local` 을 소유하고 있으면 설치되지 않습니다. 이유는 [한계](https://github.com/Orchemi/exem-wifi-switcher/wiki/limitations)를 참고하세요.
 
-1. **[최신 릴리즈](https://github.com/Orchemi/exem-wifi-switcher/releases/latest) 의 Assets 에서 `EXEM-Wifi-Switcher-?.?.?.zip` 을 내려받습니다**
-
-   <p align="center"><img src="docs/screenshots/release-assets.png" width="300" alt="GitHub 릴리즈 페이지의 Assets 목록이 펼쳐진 화면. 맨 위에 EXEM-Wifi-Switcher 로 시작하는 zip 파일이 있고, 그 아래에 Source code (zip) 과 Source code (tar.gz) 가 있다." /><br><sub>맨 위의 <b>EXEM-Wifi-Switcher</b> zip 을 받으세요. 아래 두 줄의 Source code 는 앱이 아니라 소스 코드입니다.</sub></p>
-
-2. 압축을 풀고 `EXEM Wifi Switcher.app` 을 **응용 프로그램** 폴더로 옮깁니다
-3. 앱을 엽니다. 처음에는 macOS 가 막으므로 **위 경고의 여는 방법**을 한 번 거칩니다
-4. 설정 창의 **권한** 항목에서 **[설치]** 를 누릅니다. 무엇을 어디에 설치할지 먼저 보여주고, 확인하면 관리자 암호를 한 번 묻습니다
-5. 사내 **Wi-Fi 이름·IP·서브넷 마스크·라우터·DNS 서버** 를 입력하고 저장합니다. 저장할 때 관리자 암호를 **한 번 더** 묻습니다. 이것이 마지막입니다 ([설정하기](https://github.com/Orchemi/exem-wifi-switcher/wiki/settings))
+1. 압축을 풀고 `EXEM Wifi Switcher.app` 을 **응용 프로그램** 폴더로 옮깁니다
+2. 앱을 엽니다. 처음에는 macOS 가 막으므로 **위 경고의 여는 방법**을 한 번 거칩니다
+3. 설정 창의 **권한** 항목에서 **[설치]** 를 누릅니다. 무엇을 어디에 설치할지 먼저 보여주고, 확인하면 관리자 암호를 한 번 묻습니다
+4. 사내 **Wi-Fi 이름·IP·서브넷 마스크·라우터·DNS 서버** 를 입력하고 저장합니다. 저장할 때 관리자 암호를 **한 번 더** 묻습니다. 이것이 마지막입니다 ([설정하기](https://github.com/Orchemi/exem-wifi-switcher/wiki/settings))
 
 ## 제거
 

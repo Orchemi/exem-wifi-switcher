@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="214" height="60" viewBox="0 0 214 60" role="img" aria-label="최신 버전 내려받기">
+  <!--
+    README 설치 항목의 다운로드 버튼.
+
+    색은 앱 아이콘과 같은 슬레이트 네이비 그라디언트다 (Resources/icons/export.sh 의
+    GRAD_TOP · GRAD_BOTTOM). 한 장으로 라이트·다크를 모두 감당한다: 진한 배경에 흰
+    글자라 GitHub 의 두 테마에서 모두 읽힌다. 테마별로 나누면 같은 문구가 두 파일에
+    흩어져 한쪽만 고치는 날이 온다.
+
+    좌우 여백은 눈대중이 아니라 렌더한 이미지의 잉크 경계를 재서 맞췄다 (27.3 / 27.3).
+    글자 크기·자간을 바꾸면 그 균형이 깨진다. 고칠 때는 다시 재라.
+
+    글자는 <text> 로 둔다. path 로 굳히면 고칠 수 없게 되고, 한글 폰트가 없는 환경을
+    위해서는 <title> 과 README 의 alt 에 같은 문구를 적어 두었다.
+  -->
+  <title>최신 버전 내려받기</title>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#42536F"/>
+      <stop offset="1" stop-color="#232D40"/>
+    </linearGradient>
+  </defs>
+  <rect width="214" height="60" rx="30" fill="url(#g)"/>
+  <rect x=".75" y=".75" width="212.5" height="58.5" rx="29.25" fill="none" stroke="#FFFFFF" stroke-opacity=".16"/>
+  <circle cx="33.6" cy="30" r="15" fill="#FFFFFF" fill-opacity=".14"/>
+  <g stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M33.6 23v9"/>
+    <path d="M29.1 28l4.5 4.5 4.5-4.5"/>
+    <path d="M28.1 37h11"/>
+  </g>
+  <text x="64.6" y="36" font-family="-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', 'Noto Sans KR', 'Malgun Gothic', sans-serif" font-size="17" font-weight="600" fill="#FFFFFF" letter-spacing="-.2">최신 버전 내려받기</text>
+</svg>
