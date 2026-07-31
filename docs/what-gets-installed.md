@@ -59,3 +59,22 @@
   이 앱은 서명이 빌드마다 달라져 위치 권한도 그 서명에 매여 있으므로, 남겨 두어도
   다음 설치 때 macOS가 다시 물어봅니다 ([업데이트 문서](./updating.md) 참고)
 - `/usr/local/libexec` · `/usr/local/etc` 디렉터리. 이 도구가 만들었더라도 다른 도구가 쓸 수 있어 남깁니다
+
+## 앱이 열리지 않아 [앱 삭제…] 를 누를 수 없다면
+
+제거 스크립트가 앱 번들 안에 들어 있습니다. 터미널에서 이렇게 부릅니다.
+
+```bash
+# 무엇을 지울지 먼저 보기
+"/Applications/EXEM Wifi Switcher.app/Contents/Resources/scripts/uninstall.sh" --dry-run
+
+# 실제로 지우기 (필요한 순간에만 sudo 로 승격합니다)
+"/Applications/EXEM Wifi Switcher.app/Contents/Resources/scripts/uninstall.sh"
+```
+
+앱을 응용 프로그램 폴더가 아닌 곳에 두셨다면 그 경로로 바꿔 부릅니다. **앱까지 지워 버리셨다면** 저장소를 내려받아
+`./scripts/uninstall.sh` 를 쓰면 됩니다. 지우는 대상은 모두 앱 밖에 있고, 두 스크립트는 같은 파일입니다.
+
+이 길로 제거하면 위 표대로 **앱 번들이 남습니다.** 직접 휴지통으로 옮겨 주세요. 로그인 항목은 파일이 아니라
+macOS 가 관리하는 기록이라 셸에서 끌 방법이 없습니다. 스크립트는 끄는 방법을 안내만 하고,
+앱 번들을 지우면 macOS 가 함께 정리합니다.
