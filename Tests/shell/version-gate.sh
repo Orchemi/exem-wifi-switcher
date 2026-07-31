@@ -166,11 +166,12 @@ else
     t_fail "태그 판정이 번들 조립보다 뒤에 있습니다 (판정 $gate_line 행, 조립 $build_line 행)"
 fi
 
-# --- 번들 버전 ↔ zip 이름 -------------------------------------------------------
+# --- 번들 버전 ↔ SHORT_VERSION --------------------------------------------------
 #
-# --skip-build 로 예전 번들을 묶으면 zip 이름만 새 버전이 된다. 그 자리를 막는 검사다.
+# --skip-build 로 예전 번들을 묶으면 스크립트가 찍어 주는 버전만 새것이 되고, 그 값이
+# 그대로 릴리즈 노트로 간다. 그 자리를 막는 검사다.
 
-t_section "번들 Info.plist 의 버전을 zip 이름과 대조한다"
+t_section "번들 Info.plist 의 버전을 build-app.sh 의 SHORT_VERSION 과 대조한다"
 if grep -q 'bundle_short_version "\$APP_BUNDLE"' "$PACKAGE_RELEASE"; then t_pass; else
     t_fail "package-release.sh 가 번들 Info.plist 의 버전을 보지 않습니다"
 fi
@@ -218,9 +219,42 @@ if command -v plutil >/dev/null 2>&1; then
     fi
 fi
 
+# --- zip 이름은 고정이다 --------------------------------------------------------
+#
+# README 의 내려받기 버튼은 releases/latest/download/EXEM-Wifi-Switcher.zip 을 가리킨다.
+# 자산 이름은 그 주소의 마지막 조각이라 이름에 버전이 들어오는 순간 버튼이 404 를 받는다.
+# 사람이 눈으로 보고 알아채는 종류의 고장이 아니다 (버튼은 그대로 있고 누르면 안 될 뿐이다).
+
+t_section "zip 이름에 버전이 들어가지 않는다"
+if grep -q 'ARCHIVE="\$OUTPUT_DIR/\$ARCHIVE_BASENAME\.zip"' "$PACKAGE_RELEASE"; then t_pass; else
+    t_fail "zip 이름이 '\$ARCHIVE_BASENAME.zip' 고정이 아닙니다 (README 의 내려받기 버튼이 끊깁니다)"
+fi
+if grep -qE 'ARCHIVE="[^"]*\$(\{)?VERSION' "$PACKAGE_RELEASE"; then
+    t_fail "zip 이름에 버전이 들어 있습니다 (releases/latest/download 주소가 릴리즈마다 달라집니다)"
+else
+    t_pass
+fi
+
+# 버튼이 가리키는 주소와 실제 자산 이름이 같은 값에서 나와야 한다.
+if grep -q 'RELEASE_DOWNLOAD_URL="https://github.com/[^"]*/releases/latest/download/\$ARCHIVE_BASENAME\.zip"' "$PACKAGE_RELEASE"; then
+    t_pass
+else
+    t_fail "고정 내려받기 주소가 ARCHIVE_BASENAME 에서 나오지 않습니다 (주소와 자산 이름이 갈라집니다)"
+fi
+
+# README 의 버튼이 정말 그 주소를 가리키는지 본다. 스크립트만 맞고 README 가 옛 주소면
+# 고쳐야 할 곳을 반쪽만 고친 것이다.
+if [ -f "$REPO_ROOT/README.md" ]; then
+    if grep -q 'releases/latest/download/EXEM-Wifi-Switcher\.zip' "$REPO_ROOT/README.md"; then
+        t_pass
+    else
+        t_fail "README 의 내려받기 버튼이 고정 주소를 가리키지 않습니다"
+    fi
+fi
+
 # --- 버전의 출처가 하나인가 -----------------------------------------------------
 #
-# zip 이름·Info.plist·이 검사가 모두 같은 값을 봐야 게이트가 뜻을 갖는다.
+# 릴리즈 노트에 적을 버전·Info.plist·이 검사가 모두 같은 값을 봐야 게이트가 뜻을 갖는다.
 # 다른 자리에 버전을 적으면 그 자리가 조용히 갈라진다.
 
 t_section "버전의 출처는 build-app.sh 의 SHORT_VERSION 하나다"

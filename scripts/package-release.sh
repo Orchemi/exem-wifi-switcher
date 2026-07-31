@@ -5,9 +5,18 @@
 # 하는 일은 다섯뿐이다.
 #   1. 태그와 번들 버전이 어긋나지 않았는지 본다
 #   2. 번들을 새로 조립한다 (--skip-build 로 건너뛸 수 있다)
-#   3. 서명이 온전한지, 번들이 품어야 할 파일이 다 있는지, 버전이 zip 이름과 같은지 확인한다
+#   3. 서명이 온전한지, 번들이 품어야 할 파일이 다 있는지, 번들 버전이 맞는지 확인한다
 #   4. 공개해서는 안 될 값이 번들에 섞이지 않았는지 훑는다 (RULES.md 배포 전 점검)
 #   5. ditto 로 zip 을 만들고 SHA-256 을 찍는다
+#
+# **zip 이름에 버전을 넣지 않는다.** 이름은 'EXEM-Wifi-Switcher.zip' 하나로 고정한다.
+# GitHub 은 releases/latest/download/<자산이름> 을 최신 릴리즈의 그 이름 자산으로 넘겨주는데,
+# 이름에 버전이 있으면 그 주소가 매 릴리즈마다 달라져 README 의 내려받기 버튼을 판올림할 때마다
+# 고쳐야 한다. 고치는 것을 잊으면 버튼은 옛 버전을 계속 내주고, 아무도 알아채지 못한다.
+# 대신 **파일 이름만 보고는 어느 버전인지 알 수 없게 된다.** 사람이 버전을 확인하는 자리가
+# 릴리즈 노트와 번들의 Info.plist 둘로 줄어든다는 뜻이다. 이 스크립트가 마지막에 버전과
+# SHA-256 을 함께 찍는 것은 그 둘을 릴리즈 노트로 옮겨 적으라는 뜻이다.
+# 버전 게이트는 이름과 무관하게 그대로다 (build-app.sh 의 SHORT_VERSION ↔ HEAD 태그 ↔ 번들 plist).
 #
 # **서명·공증은 하지 않는다.** 유료 개발자 계정이 없다. 내려받은 사람은 첫 실행에서
 # Gatekeeper 경고를 만난다 — 그 사실과 여는 방법을 README 에 적어 두었다.
@@ -23,6 +32,10 @@ REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
 APP_NAME="EXEM Wifi Switcher"
 ARCHIVE_BASENAME="EXEM-Wifi-Switcher"
+
+# README 의 내려받기 버튼이 가리키는 고정 주소. 자산 이름이 이 주소의 마지막 조각이므로
+# 둘은 함께 움직인다 (한쪽만 바꾸면 버튼이 404 를 받는다).
+RELEASE_DOWNLOAD_URL="https://github.com/Orchemi/exem-wifi-switcher/releases/latest/download/$ARCHIVE_BASENAME.zip"
 
 OUTPUT_DIR="$REPO_ROOT/dist"
 SKIP_BUILD=0
@@ -46,7 +59,7 @@ USAGE
 
 # --- 버전 ↔ 태그 -------------------------------------------------------------
 #
-# 버전의 출처는 scripts/build-app.sh 의 SHORT_VERSION 하나다 — Info.plist 도 zip 이름도 그 값에서 나온다.
+# 버전의 출처는 scripts/build-app.sh 의 SHORT_VERSION 하나다. Info.plist 도 릴리즈 노트에 적을 값도 그 값에서 나온다.
 # 그런데 사람이 손으로 다는 태그는 그 값을 모른다. 어긋난 채로 올리면 `v0.1.0` 태그를 보고 내려받은
 # zip 안에 다른 버전의 번들이 들어 있게 되고, README 가 권하는 **SHA-256 대조가 무엇을 확인하는지**
 # 알 수 없게 된다. 받은 사람이 스스로 확인할 유일한 수단이 그것이라 여기서 막는다 —
@@ -130,8 +143,9 @@ check_version_against_tags() {
     return 0
 }
 
-# 묶는 번들이 정말 그 버전인지 본다. --skip-build 로 예전 번들을 그대로 묶으면
-# zip 이름만 새 버전이고 안에는 옛 번들이 들어간다 — 조립을 건너뛴 길에서만 생기는 어긋남이다.
+# 묶는 번들이 정말 그 버전인지 본다. --skip-build 로 예전 번들을 그대로 묶으면 이 스크립트가
+# 찍어 주는 버전만 새것이고 안에는 옛 번들이 들어간다. 그 값을 그대로 릴리즈 노트에 옮겨 적으면
+# 받는 사람은 없는 버전을 받았다고 믿는다. 조립을 건너뛴 길에서만 생기는 어긋남이다.
 bundle_short_version() {
     plutil -extract CFBundleShortVersionString raw -o - "$1/Contents/Info.plist" 2>/dev/null || true
 }
@@ -162,7 +176,7 @@ VERSION=$("$REPO_ROOT/scripts/build-app.sh" --print-version)
 [ -n "$VERSION" ] || die "버전을 읽지 못했습니다"
 
 APP_BUNDLE="$OUTPUT_DIR/$APP_NAME.app"
-ARCHIVE="$OUTPUT_DIR/$ARCHIVE_BASENAME-$VERSION.zip"
+ARCHIVE="$OUTPUT_DIR/$ARCHIVE_BASENAME.zip"
 
 # --- 1) 버전 ----------------------------------------------------------------
 #
@@ -196,10 +210,11 @@ heading "3/5  번들 점검"
 codesign --verify --strict "$APP_BUNDLE" || die "서명 검증에 실패했습니다 (다시 조립하세요)"
 printf '    서명 확인 (ad-hoc — 공증은 하지 않습니다)\n'
 
-# 묶는 번들이 zip 이름과 같은 버전인지 본다. 두 값이 갈릴 수 있는 자리는 --skip-build 하나다.
+# 묶는 번들의 Info.plist 가 build-app.sh 의 SHORT_VERSION 과 같은지 본다.
+# 두 값이 갈릴 수 있는 자리는 --skip-build 하나다.
 BUNDLE_VERSION_IN_PLIST=$(bundle_short_version "$APP_BUNDLE")
-[ "$BUNDLE_VERSION_IN_PLIST" = "$VERSION" ] || die "번들 버전($BUNDLE_VERSION_IN_PLIST)이 zip 이름의 버전($VERSION)과 다릅니다 — --skip-build 로 예전 번들을 묶고 있지 않은지 보세요"
-printf '    번들 버전 %s (zip 이름과 같습니다)\n' "$BUNDLE_VERSION_IN_PLIST"
+[ "$BUNDLE_VERSION_IN_PLIST" = "$VERSION" ] || die "번들 버전($BUNDLE_VERSION_IN_PLIST)이 build-app.sh 의 SHORT_VERSION($VERSION)과 다릅니다. --skip-build 로 예전 번들을 묶고 있지 않은지 보세요"
+printf '    번들 버전 %s (build-app.sh 의 SHORT_VERSION 과 같습니다)\n' "$BUNDLE_VERSION_IN_PLIST"
 
 # 앱의 [설치] 버튼이 부르는 파일들. 하나라도 빠지면 내려받은 사람은 버튼만 있고 동작이 없다.
 BUNDLED_SCRIPTS="$APP_BUNDLE/Contents/Resources/scripts"
@@ -262,7 +277,16 @@ cat <<NEXT
   버전     $VERSION
   SHA-256  $(shasum -a 256 "$ARCHIVE" | awk '{ print $1 }')
 
+파일 이름에는 버전이 없습니다. README 의 내려받기 버튼이 이 고정 주소를 가리키고,
+GitHub 이 이 이름의 자산을 최신 릴리즈에서 찾아 주기 때문입니다.
+
+  $RELEASE_DOWNLOAD_URL
+
+그래서 **올릴 때 자산 이름을 바꾸면 그 버튼이 조용히 끊깁니다.** 이름을 그대로 두세요.
+받는 사람이 버전을 확인할 수 있는 곳도 릴리즈 노트뿐입니다.
+
 릴리즈 노트에 반드시 적을 것
+  - **위 버전** (파일 이름으로는 알 수 없습니다)
   - 서명·공증이 없어 첫 실행에서 Gatekeeper 가 막는다는 사실과 여는 방법
     (시스템 설정 > 개인정보 보호 및 보안 에서 "확인 없이 열기")
   - 위 SHA-256 (내려받은 파일이 올린 그대로인지 확인할 수 있게)
