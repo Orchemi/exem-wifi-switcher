@@ -32,6 +32,7 @@ Tests/
 Resources/icons/         # 메뉴바 템플릿 아이콘 + 앱 아이콘
 scripts/                 # apply·save-config(root 실행) · install.sh · uninstall.sh
                          # build-app.sh(번들 조립) · package-release.sh(배포 zip)
+                         # location.entitlements(Developer ID 서명에만 넘기는 빌드 입력)
 config.example.json      # 설정 예시 (실 설정은 /usr/local/etc 에만 둔다)
 docs/                    # Wiki 로 발행되는 문서(바로 아래 *.md) · 계획 문서(plan/)
                          # README 스크린샷(screenshots/) · README UI 에셋(assets/)
@@ -62,6 +63,13 @@ docs/                    # Wiki 로 발행되는 문서(바로 아래 *.md) · �
   **인증서 정보는 저장소에 넣지 않는다** (실명·Team ID·앱 암호 일체). 환경변수와 키체인에만 둔다.
   **이 분기를 없애고 한쪽으로 고정하지 마라.** 인증서는 빌려 쓰는 것이라 언제든 사라질 수 있고,
   그때 환경변수를 빼는 것만으로 예전 동작으로 돌아와야 한다
+- **hardened runtime 을 켜면 `scripts/location.entitlements` 가 반드시 함께 가야 한다** (2026-08-03 실측).
+  위치 entitlement 없이 `--options runtime` 으로 서명하면 위치 승인 창이 **조용히 뜨지 않는다**
+  (오류도 로그도 없다). SSID 를 읽지 못해 자동 전환이 통째로 죽는데 서명도 공증도 전부 통과하고,
+  만든 사람 기계에서는 예전에 준 권한이 남아 있어 멀쩡히 돌아간다. 처음 설치한 사람만 죽는다.
+  **`--entitlements` 를 빼거나 그 파일을 지우지 마라.** 실측 표는 `scripts/build-app.sh` 의
+  `ENTITLEMENTS_FILE` 자리에 적어 두었다. 설명이 그 파일 안이 아니라 거기 있는 이유도 실측이다
+  (entitlements 파일에 XML 주석이 있으면 hardened runtime 서명이 그것을 읽지 못해 실패한다)
 - **로그인 항목은 `SMAppService.mainApp` 이다** — ad-hoc 서명으로 동작한다 (2026-07-29 실측).
   `SMAppService` 가 Developer ID 를 요구한다는 것은 **`.daemon`**(root 데몬) 이야기이고,
   앱 자신을 올리는 `.mainApp` 에는 해당하지 않는다. **`~/Library/LaunchAgents` 에 plist 를 놓는

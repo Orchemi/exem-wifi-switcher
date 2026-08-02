@@ -28,6 +28,10 @@
 #    macOS 는 같은 앱으로 보고, **위치 권한이 유지된다.** hardened runtime 은 공증의 전제 조건이라
 #    공증(scripts/package-release.sh)으로 가려면 이 길이어야 한다.
 #    **인증서 이름은 저장소에 적지 않는다.** 빌드할 때 환경변수로만 준다.
+#    이 길에서는 `scripts/location.entitlements` 를 함께 넘긴다. hardened runtime 을 켜면
+#    그 파일의 위치 entitlement 가 없는 한 위치 승인 창이 **조용히 뜨지 않고**, SSID 를 읽지 못해
+#    자동 전환이 통째로 죽는다 (실측 근거는 아래 ENTITLEMENTS_FILE 자리에 있다).
+#    ad-hoc 쪽에는 넘기지 않는다.
 #
 # 두 길 사이를 오가는 그 한 번은 어느 쪽이든 위치 권한이 풀린다. 신원 자체가 달라지기 때문이다.
 #
@@ -36,6 +40,7 @@
 #   mode=adhoc|developer-id
 #   hardened-runtime=yes|no
 #   timestamp=yes|no
+#   entitlements=yes|no        (yes 면 scripts/location.entitlements 를 서명에 넘긴다)
 #   identifier=<번들 식별자>
 #
 # 번들은 설치 스크립트를 함께 품는다 (Contents/Resources/scripts/).
@@ -81,6 +86,36 @@ PRINT_SIGNING_ONLY=0
 # 값을 저장소에 적지 마라. 인증서 이름에는 사람 실명과 Team ID 가 들어간다.
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 
+# Developer ID 서명에만 함께 넘기는 entitlements. 서명할 때 한 번 읽는 **빌드 입력**이고,
+# '.app' 안에는 이 파일이 아니라 서명에 봉인된 값만 남는다. 그래서 아이콘이 있는 Resources/ 가
+# 아니라 이것을 읽는 이 스크립트 옆에 둔다.
+#
+# **왜 있어야 하는가.** hardened runtime(--options runtime)을 켠 서명에서는 이 키가 없으면
+# CLLocationManager.requestWhenInUseAuthorization() 이 조용히 삼켜진다. 승인 창이 뜨지 않고
+# 오류도 로그도 남지 않는다. 이 앱은 SSID 를 읽으려고 위치 권한을 쓰므로 그러면 자동 전환이
+# 통째로 죽는데, 서명도 공증도 전부 통과한다. 만든 사람 기계에서는 예전에 준 권한이 남아 있어
+# 멀쩡히 돌아가므로 **처음 설치한 사람만 죽는다.** 실제로 그렇게 한 번 나갔다.
+#
+# 실측 (2026-08-03. 같은 코드·같은 인증서로, 번들 식별자를 새로 파서 '처음 설치' 조건을 만들고
+# 서명 옵션만 바꿔 가며 /var/db/locationd/clients.plist 를 읽었다)
+#
+#   --options runtime                  Registered => true 만 남는다. Authorized 키가 없다
+#   옵션 없음                           Authorized => true
+#   --options runtime + 이 파일          Authorized => true
+#
+# 즉 hardened runtime 과 이 파일은 한 몸이다. 공증하려면 hardened runtime 이 전제 조건이므로,
+# 공증하는 길에서 이 파일을 뺄 수 없다. 둘 중 하나만 지우지 마라.
+#
+# **키는 하나만 둔다.** hardened runtime 의 entitlement 는 하나하나가 샌드박스 완화다.
+# 쓰지 않는 것을 넣으면 그만큼 앱이 열리고, 공증 심사에서 설명할 것도 늘어난다.
+#
+# **그 파일에 XML 주석을 넣지 마라. 그래서 이 설명이 파일이 아니라 여기 있다.**
+# hardened runtime 서명은 entitlements 를 DER 로도 굽는데, 그때 쓰는 파서가 주석을 받지 않는다.
+# 주석을 넣고 --options runtime 으로 서명하면 codesign 이
+# "Failed to parse entitlements: AMFIUnserializeXML: syntax error" 로 실패한다 (2026-08-03 실측).
+# 다행히 조용하지 않고 종료코드 1 로 죽지만, 원인을 그 메시지만 보고 알아내기는 어렵다.
+ENTITLEMENTS_FILE="$REPO_ROOT/scripts/location.entitlements"
+
 err() { printf '%s\n' "$*" >&2; }
 die() { err ""; err "중단: $*"; exit 1; }
 heading() { printf '\n\033[1m%s\033[0m\n' "$*"; }
@@ -105,9 +140,10 @@ USAGE
 # 서명 계획. 빌드도 서명도 하지 않고, 무엇으로 서명할지만 말한다.
 # 인증서 이름 자체는 찍지 않는다 (실명과 Team ID 가 들어가는 자리라 로그·이슈로 새기 쉽다).
 #
-# **환경변수만 보고 답한다. 키체인은 보지 않는다.** SIGN_IDENTITY 가 있으면 Developer ID,
+# **환경변수만 보고 답한다. 키체인도 파일도 보지 않는다.** SIGN_IDENTITY 가 있으면 Developer ID,
 # 없으면 ad-hoc 이고, 그 둘 말고 다른 답은 없다 (막히는 조합이 없다).
-# 그 이름의 인증서가 키체인에 실제로 있는지는 계획이 아니라 환경이고, 계획을 낸 뒤에도 바뀐다.
+# 그 이름의 인증서가 키체인에 실제로 있는지, entitlements 파일이 제자리에 있는지는 계획이 아니라
+# 환경이고, 계획을 낸 뒤에도 바뀐다.
 # 그래서 여기서 묻지 않고 실제로 빌드하는 길에서 확인한다 (아래 사전 점검).
 # package-release.sh 의 --print-notary-plan 이 mode=blocked 를 내는 것과는 다른 이야기다.
 # 그쪽은 환경변수 조합만으로 이미 막힌다는 것을 알 수 있어서 계획이 답할 수 있다.
@@ -116,10 +152,13 @@ print_signing_plan() {
         printf 'mode=developer-id\n'
         printf 'hardened-runtime=yes\n'
         printf 'timestamp=yes\n'
+        # hardened runtime 을 켜는 길에서만 entitlements 를 넘긴다. 둘은 함께 움직인다.
+        printf 'entitlements=yes\n'
     else
         printf 'mode=adhoc\n'
         printf 'hardened-runtime=no\n'
         printf 'timestamp=no\n'
+        printf 'entitlements=no\n'
     fi
     printf 'identifier=%s\n' "$BUNDLE_ID"
 }
@@ -208,6 +247,35 @@ command -v plutil >/dev/null || die "plutil 을 찾지 못했습니다"
 # 인증서가 정말 있는지 **빌드 전에** 본다. 서명은 마지막 단계라, 여기서 보지 않으면
 # 몇 분짜리 빌드를 다 마친 뒤 이름 오타 하나로 실패한다.
 if [ -n "$SIGN_IDENTITY" ]; then
+    # entitlements 부터 본다. 인증서가 없으면 서명이 실패해서 사람이 바로 알지만,
+    # **entitlements 가 빠지면 서명도 공증도 전부 통과한다.** 대신 앱에서 위치 승인 창이
+    # 뜨지 않아 자동 전환이 조용히 죽고, 그것을 처음 설치한 사람만 겪는다. 실제로 그렇게
+    # 한 번 나갔다. 조용히 빠질 수 있는 쪽을 먼저, 그리고 서명하기 한참 전에 막는다.
+    if [ ! -f "$ENTITLEMENTS_FILE" ]; then
+        err ""
+        err "중단: Developer ID 서명에 넘길 entitlements 파일이 없습니다."
+        err "    $ENTITLEMENTS_FILE"
+        err ""
+        err "  이 파일 없이 hardened runtime 으로 서명하면 위치 승인 창이 뜨지 않습니다."
+        err "  SSID 를 읽지 못해 자동 전환이 통째로 죽는데, 서명도 공증도 전부 통과하므로"
+        err "  만든 사람은 알아채지 못합니다. 그래서 여기서 멈춥니다."
+        err ""
+        err "  파일이 저장소에서 지워졌다면 되살리세요 (git 이력에 있습니다)."
+        err "  인증서 없이 만들려면 SIGN_IDENTITY 를 지우세요 (ad-hoc 서명에는 필요 없습니다)."
+        exit 1
+    fi
+    # 문법이 깨진 plist 는 codesign 이 알아보기 어려운 말로 거절한다. 여기서 먼저 짚어 준다.
+    plutil -lint "$ENTITLEMENTS_FILE" >/dev/null \
+        || die "entitlements 파일의 문법 검사에 실패했습니다: $ENTITLEMENTS_FILE"
+
+    # **XML 주석이 있으면 hardened runtime 서명이 실패한다.** plutil 은 주석을 통과시키므로
+    # 위 검사로는 잡히지 않는다 (근거는 위 ENTITLEMENTS_FILE 자리). 설명을 파일 안에 적고 싶은
+    # 마음이 드는 것이 자연스러운 자리라, 그렇게 했을 때 몇 분짜리 빌드를 다 마친 뒤 마지막
+    # 서명에서 알게 되지 않도록 여기서 먼저 잡는다.
+    if grep -q -e '<!--' -- "$ENTITLEMENTS_FILE"; then
+        die "entitlements 파일에 XML 주석이 있습니다. hardened runtime 서명이 그 주석을 읽지 못해 실패합니다. 설명은 파일이 아니라 scripts/build-app.sh 의 ENTITLEMENTS_FILE 자리에 적으세요: $ENTITLEMENTS_FILE"
+    fi
+
     command -v security >/dev/null || die "security 를 찾지 못했습니다 (SIGN_IDENTITY 로 서명하려면 필요합니다)"
     # 목록을 먼저 변수에 받는다. `security ... | grep -q` 로 이으면 grep 이 먼저 끝나면서
     # security 가 SIGPIPE 로 죽고, pipefail 때문에 찾았는데도 실패로 읽힌다.
@@ -314,12 +382,16 @@ fi
 if [ -n "$SIGN_IDENTITY" ]; then
     # --options runtime (hardened runtime) 은 공증의 전제 조건이다. 없이 서명하면 공증이
     # 그 이유로 반려된다. --timestamp 는 Apple 의 타임스탬프 서버를 부르므로 네트워크가 필요하다.
+    #
+    # --entitlements 는 그 hardened runtime 과 한 몸이다. runtime 을 켠 채 이것을 빼면
+    # 위치 승인 창이 조용히 뜨지 않아 자동 전환이 죽는다 (실측 표는 위 ENTITLEMENTS_FILE 자리에 있다).
+    # 둘 중 하나만 지우지 마라. 파일이 제자리에 있는지는 위 사전 점검에서 이미 봤다.
     heading "5/5  Developer ID 서명"
     codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID" \
-        --options runtime --timestamp "$APP_BUNDLE" \
+        --options runtime --timestamp --entitlements "$ENTITLEMENTS_FILE" "$APP_BUNDLE" \
         || die "Developer ID 서명에 실패했습니다. --timestamp 는 Apple 타임스탬프 서버를 부릅니다. 네트워크 연결을 확인하세요"
     codesign --verify --strict "$APP_BUNDLE"
-    printf '    서명 확인됨 (Developer ID, hardened runtime, 식별자 %s)\n' "$BUNDLE_ID"
+    printf '    서명 확인됨 (Developer ID, hardened runtime, 위치 entitlement, 식별자 %s)\n' "$BUNDLE_ID"
 else
     heading "5/5  ad-hoc 서명"
     codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"

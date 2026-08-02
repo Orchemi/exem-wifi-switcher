@@ -26,6 +26,9 @@
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 BUILD_APP="$REPO_ROOT/scripts/build-app.sh"
 PACKAGE_RELEASE="$REPO_ROOT/scripts/package-release.sh"
+# Developer ID 서명에만 넘기는 빌드 입력. 번들 리소스가 아니라서 Resources/ 가 아니라 여기 있다.
+ENTITLEMENTS="$REPO_ROOT/scripts/location.entitlements"
+LOCATION_ENTITLEMENT_KEY="com.apple.security.personal-information.location"
 
 # 키체인에 있을 리 없는 이름. 진짜 인증서 이름을 여기 적지 마라.
 FAKE_IDENTITY="Developer ID Application: Nobody At All (0000000000)"
@@ -122,6 +125,8 @@ t_says "mode=adhoc" "ad-hoc 모드를 보고한다" -- env -u SIGN_IDENTITY bash
 t_says "hardened-runtime=no" "hardened runtime 을 켜지 않는다" -- env -u SIGN_IDENTITY bash "$BUILD_APP" --print-signing
 t_says "timestamp=no" "타임스탬프를 받지 않는다 (네트워크가 필요 없다)" -- \
     env -u SIGN_IDENTITY bash "$BUILD_APP" --print-signing
+t_says "entitlements=no" "entitlements 를 넘기지 않는다 (hardened runtime 을 켜지 않는다)" -- \
+    env -u SIGN_IDENTITY bash "$BUILD_APP" --print-signing
 t_silent_about "developer-id" "developer-id 를 말하지 않는다" -- env -u SIGN_IDENTITY bash "$BUILD_APP" --print-signing
 # 빈 문자열도 '없음'과 같게 봐야 한다 (`SIGN_IDENTITY=` 로 지우고 부르는 길이 있다).
 t_says "mode=adhoc" "빈 값은 없는 것과 같다" -- env SIGN_IDENTITY= bash "$BUILD_APP" --print-signing
@@ -138,6 +143,9 @@ t_says "mode=developer-id" "developer-id 모드를 보고한다" -- \
 t_says "hardened-runtime=yes" "hardened runtime 을 켠다 (공증의 전제 조건)" -- \
     env SIGN_IDENTITY="$FAKE_IDENTITY" bash "$BUILD_APP" --print-signing
 t_says "timestamp=yes" "보안 타임스탬프를 받는다" -- \
+    env SIGN_IDENTITY="$FAKE_IDENTITY" bash "$BUILD_APP" --print-signing
+# hardened runtime 을 켜면 위치 entitlement 가 함께 가야 한다. 둘은 한 몸이다.
+t_says "entitlements=yes" "entitlements 를 함께 넘긴다 (hardened runtime 과 한 몸이다)" -- \
     env SIGN_IDENTITY="$FAKE_IDENTITY" bash "$BUILD_APP" --print-signing
 
 # 계획 출력에 인증서 이름이 섞이면 로그·이슈로 실명과 Team ID 가 새어 나간다.
@@ -188,6 +196,121 @@ t_grep "SIGN_IDENTITY 로 서명한다" "$BUILD_APP" 'codesign --force --sign "\
 t_grep "hardened runtime 과 타임스탬프를 켠다" "$BUILD_APP" '--options runtime --timestamp'
 # --timestamp 는 Apple 서버를 부른다. 네트워크가 끊긴 자리에서 실패했을 때 무엇을 볼지 알려야 한다.
 t_grep "타임스탬프 실패에 네트워크를 짚어 준다" "$BUILD_APP" '네트워크 연결을 확인하세요'
+
+# --- 위치 entitlement -----------------------------------------------------------
+#
+# hardened runtime(--options runtime)을 켠 서명에서는 위치 entitlement 가 없으면
+# 위치 승인 창이 **조용히** 뜨지 않는다. 오류도 로그도 남지 않고, 서명과 공증은 전부 통과한다.
+# 만든 사람 기계에서는 예전에 준 권한이 남아 있어 멀쩡히 돌아가므로, 처음 설치한 사람만 죽는다.
+# 실측 근거는 scripts/build-app.sh 의 ENTITLEMENTS_FILE 자리에 적어 두었다.
+#
+# 인증서가 없어 실제 서명은 재지 못한다. 대신 인증서 없이도 확실히 판정되는 것만 잰다.
+#   · 서명에 넘길 파일이 제자리에 있고 plist 로 읽히는가
+#   · 그 파일에 위치 키가 있고, **그 하나뿐인가** (entitlement 는 하나하나가 샌드박스 완화다)
+#   · 그 파일에 XML 주석이 없는가 (아래에 따로 적는다)
+#   · 서명 명령과 계획 출력이 Developer ID 쪽에서만 그것을 말하는가
+#   · 파일이 없으면 서명은커녕 빌드도 시작하지 않는가
+
+t_section "서명에 넘길 entitlements 파일이 제자리에 있다"
+if [ -f "$ENTITLEMENTS" ]; then t_pass; else t_fail "$ENTITLEMENTS 이 없습니다"; fi
+t_status 0 "plist 로 읽힌다" -- plutil -lint "$ENTITLEMENTS"
+t_grep "위치 키가 있다" "$ENTITLEMENTS" "$LOCATION_ENTITLEMENT_KEY"
+t_grep "값이 true 다" "$ENTITLEMENTS" '<true/>'
+# 필요 없는 entitlement 를 얹지 않는다. 하나가 늘면 그만큼 앱이 열린다.
+entitlement_keys=$(grep -c '<key>' "$ENTITLEMENTS")
+if [ "$entitlement_keys" = "1" ]; then t_pass; else
+    t_fail "entitlement 가 $entitlement_keys 개 있습니다 (위치 하나만 두기로 했습니다)"
+fi
+# 빌드 입력이지 번들 리소스가 아니다. 번들에 넣으면 서명에 봉인된 값과 파일이 두 벌이 된다.
+t_grep_absent "번들 안으로 복사하지 않는다" "$BUILD_APP" '(cp|install) .*ENTITLEMENTS_FILE'
+
+# **주석을 넣으면 hardened runtime 서명이 실패한다.** entitlements 를 DER 로 굽는 파서가
+# XML 주석을 받지 않아 codesign 이 "AMFIUnserializeXML: syntax error" 로 죽는다 (2026-08-03 실측).
+# plutil -lint 는 주석을 통과시키므로 위 검사로는 잡히지 않는다. 설명을 파일 안에 적고 싶은
+# 마음이 드는 자리라 여기서 못 박아 둔다 (설명은 scripts/build-app.sh 쪽에 있다).
+t_section "entitlements 파일에 XML 주석을 넣지 않는다"
+t_grep_absent "주석이 없다" "$ENTITLEMENTS" '<!--'
+
+t_section "Developer ID 서명에만 entitlements 를 넘긴다"
+t_grep "Developer ID 서명 명령에 있다" "$BUILD_APP" \
+    '--options runtime --timestamp --entitlements "\$ENTITLEMENTS_FILE"'
+# ad-hoc 은 hardened runtime 을 켜지 않으므로 이 entitlement 가 의미가 없다.
+t_grep_absent "ad-hoc 서명 명령에는 없다" "$BUILD_APP" 'codesign --force --sign - .*--entitlements'
+
+t_section "entitlements 파일이 없으면 Developer ID 빌드를 시작하지 않는다"
+# scripts/build-app.sh 만 있고 entitlements 파일이 없는 가짜 저장소를 만든다.
+# build-app.sh 는 자기 위치에서 저장소 뿌리를 잡으므로, 이것만으로 '파일이 사라진 저장소'가 된다.
+NO_ENT_REPO="$SCRATCH/no-entitlements"
+NO_ENT_OUT="$SCRATCH/no-entitlements-out"
+mkdir -p "$NO_ENT_REPO/scripts" "$NO_ENT_OUT"
+cp "$BUILD_APP" "$NO_ENT_REPO/scripts/build-app.sh"
+NO_ENT_BUILD="$NO_ENT_REPO/scripts/build-app.sh"
+
+t_status 1 "파일이 없는 저장소 + SIGN_IDENTITY" -- \
+    env SIGN_IDENTITY="$FAKE_IDENTITY" bash "$NO_ENT_BUILD" --output "$NO_ENT_OUT"
+t_says "entitlements 파일이 없습니다" "무엇이 없는지 말한다" -- \
+    env SIGN_IDENTITY="$FAKE_IDENTITY" bash "$NO_ENT_BUILD" --output "$NO_ENT_OUT"
+t_says "location.entitlements" "어느 파일인지 짚어 준다" -- \
+    env SIGN_IDENTITY="$FAKE_IDENTITY" bash "$NO_ENT_BUILD" --output "$NO_ENT_OUT"
+# 조용히 죽는 쪽을 먼저 막는다. 인증서 안내가 먼저 나오면 이 점검을 지나쳤다는 뜻이다.
+t_silent_about "security find-identity" "인증서 점검보다 먼저 멈춘다" -- \
+    env SIGN_IDENTITY="$FAKE_IDENTITY" bash "$NO_ENT_BUILD" --output "$NO_ENT_OUT"
+t_silent_about "1/5" "빌드 단계에 들어가지 않는다" -- \
+    env SIGN_IDENTITY="$FAKE_IDENTITY" bash "$NO_ENT_BUILD" --output "$NO_ENT_OUT"
+if [ -z "$(ls -A "$NO_ENT_OUT")" ]; then t_pass; else
+    t_fail "멈춘 뒤에도 출력 디렉터리에 무언가 남았습니다: $(ls -A "$NO_ENT_OUT")"
+fi
+# 점검이 빌드보다, 그리고 인증서 확인보다 앞에 있어야 한다 (실행으로 본 것을 파일 순서로도 못 박는다).
+# 'security find-identity' 는 도움말에도 적혀 있다. 실제로 키체인을 보는 줄과 대 본다.
+t_order "entitlements 점검이 인증서 점검보다 먼저다" "$BUILD_APP" \
+    '\[ ! -f "\$ENTITLEMENTS_FILE" \]' 'CODESIGNING_IDENTITIES=\$\(security find-identity'
+t_order "entitlements 점검이 swift build 보다 먼저다" "$BUILD_APP" \
+    '\[ ! -f "\$ENTITLEMENTS_FILE" \]' 'swift build -c'
+
+# **이 게이트는 ad-hoc 길을 막지 않는다.** 막으면 인증서 없는 기계에서 빌드가 통째로 죽는다.
+t_says "mode=adhoc" "파일이 없어도 ad-hoc 계획은 그대로다" -- \
+    env -u SIGN_IDENTITY bash "$NO_ENT_BUILD" --print-signing
+t_status 0 "파일이 없어도 ad-hoc 계획은 0 으로 끝난다" -- \
+    env -u SIGN_IDENTITY bash "$NO_ENT_BUILD" --print-signing
+if command -v swift >/dev/null 2>&1; then
+    # 실제 빌드 길도 막히지 않는지 본다. 이 가짜 저장소에는 Package.swift 가 없어 swift build 에서
+    # 넘어지는데, **거기까지 갔다는 것**이 사전 점검을 통과했다는 증거다.
+    t_says "1/5" "파일이 없어도 ad-hoc 빌드는 사전 점검을 지나간다" -- \
+        env -u SIGN_IDENTITY bash "$NO_ENT_BUILD" --output "$NO_ENT_OUT"
+    t_silent_about "entitlements 파일이 없습니다" "ad-hoc 길에서는 이 게이트를 걸지 않는다" -- \
+        env -u SIGN_IDENTITY bash "$NO_ENT_BUILD" --output "$NO_ENT_OUT"
+fi
+
+t_section "주석이 든 entitlements 파일로는 Developer ID 빌드를 시작하지 않는다"
+# 같은 방식으로, 이번에는 파일은 있는데 주석이 든 가짜 저장소를 만든다.
+COMMENTED_REPO="$SCRATCH/commented-entitlements"
+COMMENTED_OUT="$SCRATCH/commented-entitlements-out"
+mkdir -p "$COMMENTED_REPO/scripts" "$COMMENTED_OUT"
+cp "$BUILD_APP" "$COMMENTED_REPO/scripts/build-app.sh"
+{
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>'
+    printf '%s\n' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+    printf '%s\n' '<!-- 왜 필요한지 여기 적고 싶어진다. 그러면 서명이 죽는다. -->'
+    printf '%s\n' '<plist version="1.0">'
+    printf '%s\n' '<dict>'
+    printf '    <key>%s</key>\n' "$LOCATION_ENTITLEMENT_KEY"
+    printf '%s\n' '    <true/>'
+    printf '%s\n' '</dict>'
+    printf '%s\n' '</plist>'
+} > "$COMMENTED_REPO/scripts/location.entitlements"
+COMMENTED_BUILD="$COMMENTED_REPO/scripts/build-app.sh"
+
+# plist 로는 멀쩡히 읽힌다. 그래서 문법 검사만으로는 잡히지 않는다는 것을 함께 못 박는다.
+t_status 0 "주석이 있어도 plist 문법 검사는 통과한다" -- \
+    plutil -lint "$COMMENTED_REPO/scripts/location.entitlements"
+t_status 1 "주석이 든 파일 + SIGN_IDENTITY" -- \
+    env SIGN_IDENTITY="$FAKE_IDENTITY" bash "$COMMENTED_BUILD" --output "$COMMENTED_OUT"
+t_says "XML 주석이 있습니다" "무엇이 문제인지 말한다" -- \
+    env SIGN_IDENTITY="$FAKE_IDENTITY" bash "$COMMENTED_BUILD" --output "$COMMENTED_OUT"
+t_says "build-app.sh" "설명을 어디에 적으면 되는지 말한다" -- \
+    env SIGN_IDENTITY="$FAKE_IDENTITY" bash "$COMMENTED_BUILD" --output "$COMMENTED_OUT"
+t_silent_about "1/5" "빌드 단계에 들어가지 않는다" -- \
+    env SIGN_IDENTITY="$FAKE_IDENTITY" bash "$COMMENTED_BUILD" --output "$COMMENTED_OUT"
 
 # --- 공증: 자격증명만 있고 서명 신원이 없으면 막는다 ---------------------------------
 #
@@ -379,6 +502,27 @@ fi
 #     사내 값이 섞인 번들을 올린 시점에 이미 유출이다.
 #   · staple 이 zip 보다 먼저여야 한다. 티켓은 zip 이 아니라 '.app' 에 붙는다.
 #     뒤집히면 티켓 없는 zip 이 나가고, 만든 사람 기계에서는 잘 열려 알아채지 못한다.
+
+# --- 배포 직전에 번들의 entitlement 를 다시 본다 ------------------------------------
+#
+# 위의 build-app 게이트는 **만들 때** 빠지는 것을 막는다. 그런데 --skip-build 로 예전 번들을
+# 묶는 길이 있고, 그 번들이 entitlement 없이 서명됐는지는 환경변수로 알 수 없다.
+# 이번 사고는 "서명·공증은 전부 통과하는데 앱 기능만 죽는" 모양이었고, 배포 직전에 그것을 잡을
+# 그물이 하나도 없었다. 그래서 조립된 번들에서 직접 읽어 확인한다.
+#
+# 실행으로는 여기까지 오지 못한다 (그 앞의 Developer ID 서명 확인이 인증서 없는 기계에서 먼저 막는다).
+# 그러니 명령의 모양과 자리만이라도 붙잡아 둔다.
+
+t_section "묶기 전에 번들의 위치 entitlement 를 읽어 확인한다"
+t_grep "번들에서 직접 읽는다" "$PACKAGE_RELEASE" 'codesign -d --entitlements -'
+t_grep "어떤 키를 찾는지 적혀 있다" "$PACKAGE_RELEASE" "$LOCATION_ENTITLEMENT_KEY"
+t_grep "없으면 무엇이 벌어지는지 말한다" "$PACKAGE_RELEASE" '자동 전환이 통째로 죽습니다'
+# ad-hoc 번들에는 이 entitlement 가 없고 있을 이유도 없다. Developer ID 쪽에서만 본다
+# (기본 경로에서 이 점검이 걸리면 인증서 없는 사람이 릴리즈를 통째로 못 만든다).
+t_order "서명 주체 확인 → entitlement 확인" "$PACKAGE_RELEASE" \
+    'Authority=Developer ID Application' 'codesign -d --entitlements -'
+t_order "entitlement 확인 → 배포 전 점검" "$PACKAGE_RELEASE" \
+    'codesign -d --entitlements -' 'heading "4/6  배포 전 점검"'
 
 t_section "유출 점검이 공증보다 먼저다"
 t_order "배포 전 점검 → 공증" "$PACKAGE_RELEASE" 'heading "4/6  배포 전 점검"' 'heading "5/6  공증"'

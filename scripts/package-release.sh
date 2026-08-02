@@ -5,7 +5,8 @@
 # 하는 일은 여섯뿐이다.
 #   1. 태그와 번들 버전이 어긋나지 않았는지 본다
 #   2. 번들을 새로 조립한다 (--skip-build 로 건너뛸 수 있다)
-#   3. 서명이 온전한지, 번들이 품어야 할 파일이 다 있는지, 번들 버전이 맞는지 확인한다
+#   3. 서명이 온전한지, 위치 entitlement 가 박혔는지, 번들이 품어야 할 파일이 다 있는지,
+#      번들 버전이 맞는지 확인한다
 #   4. 공개해서는 안 될 값이 번들에 섞이지 않았는지 훑는다 (RULES.md 배포 전 점검)
 #   5. 공증하고 티켓을 번들에 붙인다 (NOTARY_PROFILE 이 있을 때만)
 #   6. ditto 로 zip 을 만들고 SHA-256 을 찍는다
@@ -322,6 +323,35 @@ if [ -n "$SIGN_IDENTITY" ]; then
             ;;
     esac
     printf '    서명 확인 (Developer ID)\n'
+
+    # 서명이 Developer ID 라는 것만으로는 부족하다. **hardened runtime 을 켠 서명에서는
+    # 위치 entitlement 가 함께 박혀 있어야 한다.** 빠지면 앱에서 위치 승인 창이 조용히 뜨지 않고,
+    # SSID 를 읽지 못해 자동 전환이 통째로 죽는다. 그런데 서명 검증도 공증도 전부 통과하고,
+    # 만든 사람 기계에서는 이미 준 권한이 남아 있어 멀쩡히 돌아간다. **처음 설치한 사람만 죽는다.**
+    # 실제로 그렇게 한 번 나갔고, 그때 이 배포 경로에는 그물이 하나도 없었다.
+    # 근거와 실측 표는 scripts/build-app.sh 의 ENTITLEMENTS_FILE 자리에 적어 두었다.
+    #
+    # 파이프로 잇지 않는다 (grep 이 먼저 끝나면 codesign 이 SIGPIPE 로 죽고 pipefail 에 걸린다).
+    # entitlements 는 stdout 으로, 진단은 stderr 로 나온다. 진단에는 빌드 기계의 절대경로가
+    # 섞이므로 버린다.
+    BUNDLE_ENTITLEMENTS=$(codesign -d --entitlements - "$APP_BUNDLE" 2>/dev/null || true)
+    case "$BUNDLE_ENTITLEMENTS" in
+        *"com.apple.security.personal-information.location"*) : ;;
+        *)
+            err ""
+            err "중단: 번들에 위치 entitlement 가 없습니다."
+            err "    com.apple.security.personal-information.location"
+            err ""
+            err "  이대로 올리면 서명도 공증도 통과하지만, 처음 설치한 사람에게는 위치 승인 창이"
+            err "  뜨지 않습니다. SSID 를 읽지 못해 자동 전환이 통째로 죽습니다."
+            err "  hardened runtime 을 켠 서명에서는 이 entitlement 가 반드시 있어야 합니다."
+            err ""
+            err "  scripts/location.entitlements 가 제자리에 있는지 보고, --skip-build 없이"
+            err "  다시 돌려 새로 서명해 조립하세요."
+            exit 1
+            ;;
+    esac
+    printf '    위치 entitlement 확인\n'
 else
     printf '    서명 확인 (ad-hoc — 공증은 하지 않습니다)\n'
 fi
