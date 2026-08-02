@@ -64,7 +64,7 @@ REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 APP_NAME="EXEM Wifi Switcher"
 BUNDLE_ID="com.horbis.exem-wifi-switcher"
 PRODUCT="exem-wifi-switcher-app"
-SHORT_VERSION="0.1.4"
+SHORT_VERSION="0.1.5"
 BUNDLE_VERSION="1"
 MINIMUM_SYSTEM="13.0"
 
