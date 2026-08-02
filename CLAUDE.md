@@ -54,8 +54,14 @@ docs/                    # Wiki 로 발행되는 문서(바로 아래 *.md) · �
   레포 루트를 기준으로 삼는 코드를 되살리지 마라
 - **`install.sh` · `uninstall.sh` 는 root 로도 실행된다** (앱에서 부르는 길). PATH 를 물려받지 않고,
   `--user` 로 대상 계정을 받으며, root 로 들어오면 자기 자리가 안전한지 먼저 확인한다
-- **코드서명 인증서 없음** (무료 Apple ID) → ad-hoc 서명. 공증이 없어 내려받은 앱은
-  Gatekeeper 에 한 번 막힌다 (README 에 여는 방법을 적어 두었다)
+- **서명은 기본이 ad-hoc 이고, 인증서는 있으면 쓴다.** 인증서 없이도 빌드·릴리즈가 전부 동작해야 한다.
+  `SIGN_IDENTITY` 가 비어 있으면 ad-hoc 서명이고, 공증이 없어 내려받은 앱은 Gatekeeper 에 한 번
+  막힌다 (README 에 여는 방법을 적어 두었다). `SIGN_IDENTITY` 에 Developer ID 인증서 이름을 주면
+  `build-app.sh` 가 hardened runtime 을 켜서 서명하고, `NOTARY_PROFILE`(키체인에 저장한
+  notarytool 프로파일)까지 주면 `package-release.sh` 가 공증하고 티켓을 붙인다.
+  **인증서 정보는 저장소에 넣지 않는다** (실명·Team ID·앱 암호 일체). 환경변수와 키체인에만 둔다.
+  **이 분기를 없애고 한쪽으로 고정하지 마라.** 인증서는 빌려 쓰는 것이라 언제든 사라질 수 있고,
+  그때 환경변수를 빼는 것만으로 예전 동작으로 돌아와야 한다
 - **로그인 항목은 `SMAppService.mainApp` 이다** — ad-hoc 서명으로 동작한다 (2026-07-29 실측).
   `SMAppService` 가 Developer ID 를 요구한다는 것은 **`.daemon`**(root 데몬) 이야기이고,
   앱 자신을 올리는 `.mainApp` 에는 해당하지 않는다. **`~/Library/LaunchAgents` 에 plist 를 놓는

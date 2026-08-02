@@ -78,6 +78,19 @@ struct ShellScriptTests {
         #expect(result.succeeded)
     }
 
+    /// 서명·공증 갈림길을 검증한다 (환경변수가 없으면 ad-hoc, 있으면 Developer ID + 공증).
+    /// **인증서가 없어도 도는 것만 잰다.** 실제 서명·제출·staple 은 여기서 재지 못한다.
+    /// 가짜 인증서 이름으로 계획 출력과 사전 차단만 확인하고, 순서는 파일에서 읽는다.
+    @Test("서명·공증 갈림길 검증이 전부 통과한다")
+    func signingSuitePasses() throws {
+        let script = RepositoryLayout.root.appendingPathComponent("Tests/shell/signing.sh").path
+        let result = try run(["/bin/bash", script])
+        if !result.succeeded {
+            Issue.record("Tests/shell/signing.sh 실패\n\(result.standardOutput)\n\(result.standardError)")
+        }
+        #expect(result.succeeded)
+    }
+
     /// docs/*.md 를 Wiki 페이지로 발행하는 변환·유출 점검을 검증한다.
     /// **네트워크를 쓰지 않고, Wiki 에 아무것도 밀지 않는다** (가짜 저장소에 --output 또는 --dry-run 으로만 돌린다).
     @Test("위키 발행 스크립트 검증이 전부 통과한다")
@@ -94,7 +107,8 @@ struct ShellScriptTests {
           arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh",
                       "scripts/build-app.sh", "scripts/package-release.sh", "scripts/publish-wiki.sh",
                       "Tests/shell/apply-tests.sh", "Tests/shell/version-gate.sh",
-                      "Tests/shell/uninstall-dry-run.sh", "Tests/shell/publish-wiki.sh"])
+                      "Tests/shell/uninstall-dry-run.sh", "Tests/shell/publish-wiki.sh",
+                      "Tests/shell/signing.sh"])
     func scriptsHaveValidSyntax(_ relativePath: String) throws {
         let path = RepositoryLayout.root.appendingPathComponent(relativePath).path
         let result = try run(["/bin/bash", "-n", path])
@@ -243,7 +257,7 @@ struct ShellScriptTests {
           arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh", "scripts/build-app.sh",
                       "scripts/package-release.sh", "scripts/publish-wiki.sh", "Tests/shell/apply-tests.sh",
                       "Tests/shell/version-gate.sh", "Tests/shell/uninstall-dry-run.sh",
-                      "Tests/shell/publish-wiki.sh"])
+                      "Tests/shell/publish-wiki.sh", "Tests/shell/signing.sh"])
     func scriptsHaveNoHardcodedHomePath(_ relativePath: String) throws {
         // 문자열을 조립해서 만든다 — 이 파일 자신이 RULES.md 의 사전 점검 grep 에 걸리지 않도록.
         let homePrefix = "/" + "Users" + "/"
