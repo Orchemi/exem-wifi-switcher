@@ -40,7 +40,7 @@ docs/                    # Wiki 로 발행되는 문서(바로 아래 *.md) · �
 
 **앱 번들은 설치 스크립트를 품는다.** `build-app.sh` 가 `install.sh` · `uninstall.sh` ·
 `apply` · `save-config` · `config.example.json` 을 `Contents/Resources/scripts/` 에 넣고
-**그 뒤에** ad-hoc 서명한다(번들 안 파일이 서명에 봉인된다). 설정 창의 [설치] 버튼은 그 스크립트를
+**그 뒤에** 서명한다(번들 안 파일이 서명에 봉인된다). 설정 창의 [설치] 버튼은 그 스크립트를
 관리자 인증을 거쳐 실행한다.
 
 ## 핵심 제약
