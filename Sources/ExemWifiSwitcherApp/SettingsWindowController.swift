@@ -1065,6 +1065,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             return "이 계정으로는 설정을 저장할 수 없습니다"
         case .helperMissing:
             return "전환 권한이 아직 설치되지 않았습니다"
+        case .helperOutdated:
+            return "설치된 저장 스크립트가 앱보다 오래됐습니다"
         default:
             return "설정을 저장하지 못했습니다"
         }

@@ -1,4 +1,29 @@
+import CryptoKit
 import Foundation
+
+/// 저장할 내용을 **인증 이전에** 못 박는 지문.
+///
+/// 앱은 내용을 임시 파일에 쓴 뒤 관리자 인증 창을 띄운다. 그 창은 수 초간 떠 있고,
+/// 임시 파일의 소유자는 root 가 아니라 로그인 사용자다 — 그 사이에 같은 사용자로 도는 코드가
+/// 내용을 갈아 끼울 수 있다. 파일은 바꿀 수 있어도 **이미 확정된 명령 인자는 바꿀 수 없으므로**,
+/// 지문을 명령에 함께 실어 보내면 무엇을 저장하는지가 인증 이전에 정해진다.
+///
+/// 표기는 `shasum -a 256` 출력과 같은 **소문자 16진수 64자**다. `save-config` 가 설치 직전에
+/// 같은 값을 다시 계산해 대조하므로, 두 자리의 규칙이 어긋나면 저장이 통째로 막힌다.
+public enum ContentDigest {
+
+    public static func sha256Hex(of data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// 소문자 16진수 64자인가. **허용 문자만 통과시키는** 화이트리스트다 —
+    /// 이 값도 인증 창 뒤에서 도는 셸 명령의 인자가 되므로 경로와 같은 잣대로 본다.
+    public static func isWellFormed(_ digest: String) -> Bool {
+        guard digest.count == 64 else { return false }
+        let allowed = Set("0123456789abcdef")
+        return digest.allSatisfy { allowed.contains($0) }
+    }
+}
 
 /// 설정 파일을 저장하는 길.
 ///
@@ -19,22 +44,32 @@ import Foundation
 ///
 /// ## 흐름
 ///
-/// 1. 검증을 통과한 설정을 **사용자만 읽을 수 있는 임시 파일**(0700 디렉터리 / 0600 파일)에 쓴다
-/// 2. `do shell script "'…/save-config' '<임시파일>'" with administrator privileges` 로
+/// 1. 검증을 통과한 설정을 **사용자만 읽을 수 있는 임시 파일**(0700 디렉터리 / 0600 파일)에 쓰고,
+///    그 내용의 SHA-256 을 함께 들고 있는다
+/// 2. `do shell script "'…/save-config' '<임시파일>' '<지문>'" with administrator privileges` 로
 ///    관리자 인증을 한 번 받는다
-/// 3. root 로 실행된 `save-config` 가 내용을 다시 검사하고 `root:wheel 0644` 로 제자리에 놓는다
+/// 3. root 로 실행된 `save-config` 가 설치할 바로 그 바이트에서 지문을 다시 계산해 대조하고,
+///    모양을 확인한 뒤 `root:wheel 0644` 로 제자리에 놓는다
 ///
-/// 임시 파일 경로는 우리가 만들고 **문자 화이트리스트로 다시 검사**하므로, 인증 창 뒤에서
+/// 임시 파일 경로도 지문도 우리가 만들고 **문자 화이트리스트로 다시 검사**하므로, 인증 창 뒤에서
 /// 도는 셸 명령에 사용자 입력이 섞여 들어갈 자리가 없다.
+///
+/// 지문이 하는 일은 인증 창이 떠 있는 **수 초 동안**의 델타를 막는 것이다. 임시 파일은
+/// 로그인 사용자 소유라 그동안 갈아 끼울 수 있고, `save-config` 의 모양 검사(JSON · 키 존재)는
+/// 공격자가 넣은 값도 통과시킨다. 그러면 그 값이 `root:wheel 0644` 로 설치되고, 그 뒤로는
+/// 무암호로 열려 있는 `apply` 가 공격자의 DNS · 게이트웨이를 계속 적용한다.
 public enum PrivilegedShell {
 
     public enum ShellError: Error, Equatable, CustomStringConvertible {
         case unsafePath(String)
+        case unsafeDigest(String)
 
         public var description: String {
             switch self {
             case .unsafePath(let path):
                 return "관리자 권한으로 넘길 수 없는 경로입니다: '\(path)'"
+            case .unsafeDigest(let digest):
+                return "저장할 내용의 지문이 16진수 64자가 아닙니다 (길이 \(digest.count))"
             }
         }
     }
@@ -72,11 +107,15 @@ public enum PrivilegedShell {
         return name.allSatisfy { allowed.contains($0) }
     }
 
-    /// `'<헬퍼>' '<임시파일>'` — 인자 두 개짜리 명령 하나. 그 밖의 것은 실행하지 않는다.
-    public static func adminCommand(helper: String, staged: String) throws -> String {
+    /// `'<헬퍼>' '<임시파일>' '<지문>'` — 인자 세 개짜리 명령 하나. 그 밖의 것은 실행하지 않는다.
+    ///
+    /// **지문을 뺀 형태는 만들지 않는다.** 그 형태가 남아 있으면 지문 없이 저장하는 길이
+    /// 되살아나고, 인증 창이 떠 있는 동안의 바꿔치기를 다시 막지 못하게 된다.
+    public static func adminCommand(helper: String, staged: String, digest: String) throws -> String {
         guard isSafePath(helper) else { throw ShellError.unsafePath(helper) }
         guard isSafePath(staged) else { throw ShellError.unsafePath(staged) }
-        return "'\(helper)' '\(staged)'"
+        guard ContentDigest.isWellFormed(digest) else { throw ShellError.unsafeDigest(digest) }
+        return "'\(helper)' '\(staged)' '\(digest)'"
     }
 
     /// 검증을 마친 셸 명령 하나를 관리자 권한으로 실행하는 AppleScript.
@@ -85,9 +124,9 @@ public enum PrivilegedShell {
         "do shell script \"\(command)\" with administrator privileges"
     }
 
-    /// 두 경로를 검사한 뒤 그대로 AppleScript 로 만든다.
-    public static func appleScript(helper: String, staged: String) throws -> String {
-        appleScript(command: try adminCommand(helper: helper, staged: staged))
+    /// 두 경로와 지문을 검사한 뒤 그대로 AppleScript 로 만든다.
+    public static func appleScript(helper: String, staged: String, digest: String) throws -> String {
+        appleScript(command: try adminCommand(helper: helper, staged: staged, digest: digest))
     }
 
     /// `id -Gn` 출력에 `admin` 그룹이 있는가. 부분 일치(`_lpadmin`)를 관리자로 세지 않는다.
@@ -129,11 +168,12 @@ public struct ConfigInstaller {
     public enum SaveError: Error, Equatable, CustomStringConvertible {
         case invalid([ValidationError])
         case helperMissing(String)
+        case helperOutdated(String)
         case notAdministrator
         case stagingFailed(String)
         case unsafeStagedPath(String)
-        case cancelled(stagedPath: String)
-        case helperFailed(message: String, stagedPath: String)
+        case cancelled(stagedPath: String, digest: String)
+        case helperFailed(message: String, stagedPath: String, digest: String)
         case directWriteFailed(String)
 
         public var description: String {
@@ -143,6 +183,10 @@ public struct ConfigInstaller {
             case .helperMissing(let path):
                 return "전환 권한이 아직 설치돼 있지 않아 설정을 저장할 수 없습니다.\n"
                     + "레포 디렉터리에서 ./scripts/install.sh 를 먼저 실행하세요. (없는 파일: \(path))"
+            case .helperOutdated(let path):
+                return "설치된 저장 스크립트가 지금 앱보다 오래돼서 저장하지 않았습니다.\n"
+                    + "설정 창의 권한 항목에서 [설치] 를 다시 실행하면 지금 앱에 맞는 스크립트로 바뀝니다.\n"
+                    + "(오래된 파일: \(path))"
             case .notAdministrator:
                 return "설정 파일은 root 소유라 저장하려면 관리자 계정이어야 합니다.\n"
                     + "지금 계정은 관리자 그룹이 아닙니다. 관리자 계정으로 로그인해 저장하거나, "
@@ -151,14 +195,16 @@ public struct ConfigInstaller {
                 return "저장할 내용을 임시 파일로 준비하지 못했습니다: \(reason)"
             case .unsafeStagedPath(let path):
                 return "임시 파일 경로에 다룰 수 없는 문자가 있어 중단했습니다: \(path)"
-            case .cancelled(let stagedPath):
+            // 이어서 저장할 명령에는 **지문까지** 적는다. 하나라도 빠지면 그대로 붙여넣어도 돌지 않고,
+            // 인증 창을 실수로 닫은 사람에게 남는 유일한 탈출구가 막힌다.
+            case .cancelled(let stagedPath, let digest):
                 return "관리자 인증을 취소해서 설정이 저장되지 않았습니다. 이전 설정이 그대로 남아 있습니다.\n"
                     + "다시 저장하거나, 터미널에서 아래 명령으로 이어서 저장할 수 있습니다:\n"
-                    + "  sudo \(InstallPaths.saveConfigScript) \(stagedPath)"
-            case .helperFailed(let message, let stagedPath):
+                    + "  sudo \(InstallPaths.saveConfigScript) \(stagedPath) \(digest)"
+            case .helperFailed(let message, let stagedPath, let digest):
                 return "설정을 저장하지 못했습니다. 이전 설정이 그대로 남아 있습니다.\n\(message)\n"
                     + "터미널에서 아래 명령으로 다시 시도할 수 있습니다:\n"
-                    + "  sudo \(InstallPaths.saveConfigScript) \(stagedPath)"
+                    + "  sudo \(InstallPaths.saveConfigScript) \(stagedPath) \(digest)"
             case .directWriteFailed(let reason):
                 return "설정 파일에 쓰지 못했습니다: \(reason)"
             }
@@ -169,6 +215,7 @@ public struct ConfigInstaller {
     private let configPath: String
     private let isRoot: () -> Bool
     private let isAdministrator: () -> Bool
+    private let helperAcceptsDigest: (String) -> Bool
     private let authorize: (String) -> AuthorizationResult
 
     public init(
@@ -176,12 +223,14 @@ public struct ConfigInstaller {
         configPath: String = InstallPaths.configFile,
         isRoot: @escaping () -> Bool = { geteuid() == 0 },
         isAdministrator: @escaping () -> Bool = PrivilegedShell.currentUserIsAdministrator,
+        helperAcceptsDigest: @escaping (String) -> Bool = ConfigInstaller.helperAcceptsDigest,
         authorize: @escaping (String) -> AuthorizationResult = ConfigInstaller.runWithAdministratorPrivileges
     ) {
         self.helperPath = helperPath
         self.configPath = configPath
         self.isRoot = isRoot
         self.isAdministrator = isAdministrator
+        self.helperAcceptsDigest = helperAcceptsDigest
         self.authorize = authorize
     }
 
@@ -208,31 +257,57 @@ public struct ConfigInstaller {
         }
         guard isAdministrator() else { throw SaveError.notAdministrator }
 
-        // 4) 내용을 사용자만 읽을 수 있는 자리에 준비한다.
+        // 4) 설치된 스크립트가 지금 계약을 아는지 **인증 창을 띄우기 전에** 확인한다.
+        //    앱만 새로 받은 사용자는 여기서 걸린다. 암호를 받아 놓고 실패하지 않는다.
+        guard helperAcceptsDigest(helperPath) else { throw SaveError.helperOutdated(helperPath) }
+
+        // 5) 내용을 사용자만 읽을 수 있는 자리에 준비하고, 그 내용의 지문을 든다.
         let staged = try stage(config)
         guard PrivilegedShell.isSafePath(staged.file) else {
             try? FileManager.default.removeItem(atPath: staged.directory)
             throw SaveError.unsafeStagedPath(staged.file)
         }
 
+        // 6) 인증 창이 뜨기 **전에** 명령을 확정한다. 이 순간부터 저장할 내용은 지문에 묶인다 —
+        //    준비 파일은 로그인 사용자 소유라 창이 떠 있는 동안 바뀔 수 있지만, 이 문자열은 못 바꾼다.
         let command: String
         do {
-            command = try PrivilegedShell.adminCommand(helper: helperPath, staged: staged.file)
+            command = try PrivilegedShell.adminCommand(
+                helper: helperPath, staged: staged.file, digest: staged.digest)
         } catch {
+            // 지문은 우리가 방금 계산한 값이라 여기까지 오는 길은 경로뿐이다.
             try? FileManager.default.removeItem(atPath: staged.directory)
             throw SaveError.unsafeStagedPath(helperPath)
         }
 
-        // 5) 인증 → root 로 실행. 실패하면 준비한 파일을 **남겨 둔다** (터미널에서 이어서 저장 가능).
+        // 7) 인증 → root 로 실행. 실패하면 준비한 파일을 **남겨 둔다** (터미널에서 이어서 저장 가능).
         switch authorize(command) {
         case .success:
             try? FileManager.default.removeItem(atPath: staged.directory)
             return .savedWithAuthorization
         case .cancelled:
-            throw SaveError.cancelled(stagedPath: staged.file)
+            throw SaveError.cancelled(stagedPath: staged.file, digest: staged.digest)
         case .failed(let message):
-            throw SaveError.helperFailed(message: message, stagedPath: staged.file)
+            throw SaveError.helperFailed(message: message, stagedPath: staged.file, digest: staged.digest)
         }
+    }
+
+    // MARK: - 설치된 스크립트의 계약 확인
+
+    /// 설치된 `save-config` 가 지문 인자를 아는가.
+    ///
+    /// `--capabilities` 는 root 가 필요 없고 아무것도 건드리지 않는다 — 그래서 **인증 창을
+    /// 띄우기 전에** 물어볼 수 있다. 예전 스크립트는 이 인자를 저장할 파일 경로로 읽고
+    /// "절대 경로여야 합니다" 로 죽으므로(exit 2), 대답 자체가 곧 버전 판별이 된다.
+    ///
+    /// 판단이 서지 않으면 **아직 모르는 것으로 본다**(fail closed). 지문을 모르는 스크립트에
+    /// 인자를 하나 더 넘기면 어차피 exit 2 로 죽고, 그때는 사용자가 암호까지 입력한 뒤다.
+    public static func helperAcceptsDigest(_ helperPath: String) -> Bool {
+        guard let result = try? SystemCommand.run([helperPath, "--capabilities"]) else { return false }
+        guard result.succeeded else { return false }
+        return result.standardOutput
+            .split(whereSeparator: { $0 == "\n" || $0 == " " || $0 == "\t" })
+            .contains("sha256")
     }
 
     // MARK: - 임시 파일
@@ -244,9 +319,12 @@ public struct ConfigInstaller {
     /// 무작위로 지은 0700 디렉터리를 새로 만들므로(이미 있으면 실패한다) 다른 사용자는 들여다볼 수 없다.
     static let stagingRoot = "/private/var/tmp"
 
-    private func stage(_ config: AppConfig) throws -> (directory: String, file: String) {
+    /// 지문은 **우리가 인코딩한 그 바이트**에서 낸다. 써 놓은 파일을 다시 읽어 계산하면
+    /// 그 사이에 바뀐 내용의 지문을 스스로 인증해 주는 꼴이 되어 막으려던 것을 그대로 통과시킨다.
+    private func stage(_ config: AppConfig) throws -> (directory: String, file: String, digest: String) {
         let directory = "\(Self.stagingRoot)/exem-wifi-switcher-\(UUID().uuidString)"
         let file = directory + "/config.json"
+        let digest: String
         do {
             try FileManager.default.createDirectory(
                 atPath: directory,
@@ -256,6 +334,7 @@ public struct ConfigInstaller {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
             let data = try encoder.encode(config)
+            digest = ContentDigest.sha256Hex(of: data)
             guard FileManager.default.createFile(
                 atPath: file, contents: data, attributes: [.posixPermissions: 0o600]
             ) else {
@@ -266,7 +345,7 @@ public struct ConfigInstaller {
         } catch {
             throw SaveError.stagingFailed("\(error)")
         }
-        return (directory, file)
+        return (directory, file, digest)
     }
 
     // MARK: - 실제 인증

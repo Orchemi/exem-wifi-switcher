@@ -706,13 +706,42 @@ if grep -q "NOPASSWD 목록에 넣지 마라" "$REPO_ROOT/scripts/save-config"; 
     t_fail "save-config 에 sudoers 금지 경고가 없습니다"
 fi
 
+# 형식이 맞는 지문 하나. 값 자체는 아무 내용의 것이어도 상관없는 자리에 쓴다.
+DUMMY_DIGEST=0000000000000000000000000000000000000000000000000000000000000000
+
 # root 가 아니면 아무것도 하지 않는다.
-"$REPO_ROOT/scripts/save-config" /private/var/tmp/nonexistent-exem-config.json >/dev/null 2>&1
+"$REPO_ROOT/scripts/save-config" /private/var/tmp/nonexistent-exem-config.json "$DUMMY_DIGEST" >/dev/null 2>&1
 t_equals "3" "$?" "root 아닌 상태에서의 종료 코드"
 "$REPO_ROOT/scripts/save-config" >/dev/null 2>&1; t_equals "2" "$?" "인자 없음"
-"$REPO_ROOT/scripts/save-config" a b >/dev/null 2>&1; t_equals "2" "$?" "인자 2개"
+"$REPO_ROOT/scripts/save-config" a "$DUMMY_DIGEST" >/dev/null 2>&1; t_equals "2" "$?" "상대 경로 + 지문"
 "$REPO_ROOT/scripts/save-config" relative/path.json >/dev/null 2>&1; t_equals "2" "$?" "상대 경로"
 "$REPO_ROOT/scripts/save-config" --help >/dev/null 2>&1; t_equals "0" "$?" "--help"
+
+# 앱은 **저장할 내용의 지문**을 함께 넘긴다. 인자 개수가 다르면 아무것도 하지 않는다.
+# 하나만 넘어오는 것은 예전 앱이 부른 것이다 — 조용히 옛 계약으로 되돌아가면 안 된다.
+"$REPO_ROOT/scripts/save-config" /private/var/tmp/x.json >/dev/null 2>&1
+t_equals "2" "$?" "지문 없이 부른 호출(예전 앱)"
+"$REPO_ROOT/scripts/save-config" /private/var/tmp/x.json "$DUMMY_DIGEST" extra >/dev/null 2>&1
+t_equals "2" "$?" "인자 3개"
+
+# 지문은 소문자 16진수 64자만 받는다. 검사는 root 검사보다 앞이라 여기서 그대로 잰다.
+for bad_digest in \
+    "" "abc" "$(printf '%063d' 0)" "$(printf '%065d' 0)" \
+    "0000000000000000000000000000000000000000000000000000000000ABCDEF" \
+    "0000000000000000000000000000000000000000000000000000000000zzzzzz" \
+    "0000000000000000000000000000000000000000000000000000000000; id "; do
+    "$REPO_ROOT/scripts/save-config" /private/var/tmp/x.json "$bad_digest" >/dev/null 2>&1
+    t_equals "2" "$?" "지문 형식 거부 '$bad_digest'"
+done
+
+# 앱은 인증 창을 띄우기 전에 **설치된 스크립트가 지문을 아는지** 묻는다 (root 가 필요 없는 질의).
+# 예전 스크립트는 이 인자를 경로로 읽고 exit 2 로 죽는다 — 그래서 대답이 곧 버전 판별이다.
+capabilities=$("$REPO_ROOT/scripts/save-config" --capabilities 2>/dev/null)
+t_equals "0" "$?" "--capabilities 종료 코드"
+case "$capabilities" in
+    *sha256*) t_pass ;;
+    *) t_fail "--capabilities 가 sha256 을 알리지 않습니다 — 실제 출력: '$capabilities'" ;;
+esac
 
 # 내용 검사는 root 없이도 직접 부를 수 있다.
 . "$REPO_ROOT/scripts/save-config"
@@ -738,6 +767,129 @@ cat > "$WORK_DIR/no-service.json" <<'JSON'
 JSON
 ( assert_looks_like_config "$WORK_DIR/no-service.json" >/dev/null 2>&1 )
 t_equals "4" "$?" "service 가 없는 설정"
+
+t_section "save-config — 검사한 바로 그 바이트를 설치한다"
+
+# 앱은 임시 파일을 쓴 뒤 관리자 인증 창을 띄운다. 그 창은 수 초간 떠 있고, 임시 파일의 소유자는
+# root 가 아니라 로그인 사용자다. 그 사이에 같은 사용자로 도는 코드가 내용을 갈아 끼우면
+# 모양 검사(JSON·키 존재)는 그대로 통과한다 — 공격자의 dns·router 가 root:wheel 0644 로 설치되고,
+# 그 뒤로는 무암호로 열려 있는 apply 가 그 값을 계속 적용한다.
+#
+# 그래서 (가) 인증 이전에 확정된 지문을 함께 받아 대조하고, (나) 대조도 설치도 **fd 로 뜬 사본**에서만 한다.
+# 경로를 다시 열어 대조하면 대조한 것과 설치하는 것이 갈라져 구멍이 그대로 남는다.
+
+# 줄바꿈으로 끝내지 않는다 — 앱이 넘기는 내용(JSONEncoder 출력)과 같은 모양이고,
+# 아래에서 명령 치환($(...))으로 받은 값과 바이트 그대로 견줄 수 있다.
+STAGED_JSON='{ "version": 1, "service": "Wi-Fi", "defaultProfile": "auto", "profiles": [ { "name": "auto", "mode": "dhcp" } ] }'
+STAGED="$WORK_DIR/staged.json"
+printf '%s' "$STAGED_JSON" > "$STAGED"
+staged_shasum=$(shasum -a 256 -- "$STAGED")
+STAGED_DIGEST=${staged_shasum%% *}
+
+# 공격자가 갈아 끼우려는 내용. **모양은 멀쩡하다** — 그래서 모양 검사로는 걸리지 않는다.
+EVIL_JSON='{ "version": 1, "service": "Wi-Fi", "defaultProfile": "evil", "profiles": [ { "name": "evil", "mode": "manual", "ip": "198.51.100.10", "subnet": "255.255.255.0", "router": "198.51.100.1", "dns": ["198.51.100.53"] } ] }'
+EVIL="$WORK_DIR/evil.json"
+printf '%s' "$EVIL_JSON" > "$EVIL"
+( assert_looks_like_config "$EVIL" >/dev/null 2>&1 )
+t_equals "0" "$?" "공격자 내용도 모양 검사는 통과한다 (그래서 지문이 필요하다)"
+
+t_equals "$STAGED_DIGEST" "$(file_digest "$STAGED")" "file_digest 가 shasum 과 같은 값을 낸다"
+# shasum 은 perl 위에 있다. 그것이 사라지는 날을 위한 두 번째 길도 **실제로 같은 값을 내야** 한다
+# (openssl 의 dgst 는 인자 형태가 shasum 과 달라, 확인하지 않으면 조용히 죽은 길이 된다).
+t_equals "$STAGED_DIGEST" "$( shasum() { return 1; }; file_digest "$STAGED" )" "openssl 로 넘어가도 같은 값"
+t_equals "" "$( shasum() { return 1; }; openssl() { return 1; }; file_digest "$STAGED" )" "지문을 못 내면 값을 지어내지 않는다"
+( shasum() { return 1; }; openssl() { return 1; }; assert_content_matches "$STAGED" "$STAGED_DIGEST" >/dev/null 2>&1 )
+t_equals "6" "$?" "지문을 계산하지 못하면 설치하지 않는다"
+
+# 지문이 맞으면 통과한다.
+( open_source_snapshot "$STAGED" >/dev/null 2>&1
+  assert_content_matches "$SOURCE_SNAPSHOT" "$STAGED_DIGEST" >/dev/null 2>&1 )
+t_equals "0" "$?" "지문이 맞는 내용"
+
+# 인증 창이 떠 있는 사이에 갈아 끼운 내용은 설치되지 않는다.
+SWAPPED="$WORK_DIR/swapped.json"
+cp "$EVIL" "$SWAPPED"
+( open_source_snapshot "$SWAPPED" >/dev/null 2>&1
+  assert_content_matches "$SOURCE_SNAPSHOT" "$STAGED_DIGEST" >/dev/null 2>&1 )
+t_equals "6" "$?" "인증 전에 바꿔치기한 내용 (F1)"
+
+# 검사를 통과한 **뒤에** 경로의 내용이 바뀌어도, 설치되는 것은 검사한 바이트다 (F4).
+TOCTOU="$WORK_DIR/toctou.json"
+cp "$STAGED" "$TOCTOU"
+installed=$(
+    open_source_snapshot "$TOCTOU" >/dev/null 2>&1
+    cat "$EVIL" > "$TOCTOU"                       # 검사 직후 갈아 끼운다
+    assert_content_matches "$SOURCE_SNAPSHOT" "$STAGED_DIGEST" >/dev/null 2>&1
+    assert_looks_like_config "$SOURCE_SNAPSHOT" >/dev/null 2>&1
+    cat "$SOURCE_SNAPSHOT"                        # 실제로 설치될 바이트
+)
+t_equals "$STAGED_JSON" "$installed" "검사 뒤 내용이 바뀌어도 설치되는 것은 검사한 바이트"
+
+# 검사 직후 경로를 다른 파일의 심링크로 바꿔도 마찬가지다 (root 전용 파일을 0644 로 복사하지 않는다).
+LINKED="$WORK_DIR/linked.json"
+cp "$STAGED" "$LINKED"
+printf 'root only secret\n' > "$WORK_DIR/secret.txt"
+installed=$(
+    open_source_snapshot "$LINKED" >/dev/null 2>&1
+    ln -sf "$WORK_DIR/secret.txt" "$LINKED"       # 검사 직후 심링크로 교체
+    assert_content_matches "$SOURCE_SNAPSHOT" "$STAGED_DIGEST" >/dev/null 2>&1
+    cat "$SOURCE_SNAPSHOT"
+)
+t_equals "$STAGED_JSON" "$installed" "심링크로 바꿔치기해도 설치되는 것은 검사한 바이트"
+case "$installed" in
+    *secret*) t_fail "심링크로 바꿔치기한 파일의 내용이 설치 대상에 들어갔습니다" ;;
+    *) t_pass ;;
+esac
+
+# 사본은 실행이 끝나면 남지 않는다.
+snapshot_dir=$( open_source_snapshot "$STAGED" >/dev/null 2>&1; printf '%s' "$SOURCE_SNAPSHOT_DIR" )
+if [ -n "$snapshot_dir" ] && [ ! -e "$snapshot_dir" ]; then t_pass; else
+    t_fail "root 전용 사본이 남았습니다: '$snapshot_dir'"
+fi
+
+# main() 을 통째로 한 번 돌려 본다 — 검사 함수가 각각 옳아도 부르는 순서가 어긋나면 소용이 없다.
+# 이 테스트가 재현할 수 없는 둘(root 로 도는 것 · 자기 자리가 root 소유인 것)만 흉내내고,
+# 설치 자리는 스크래치 디렉터리로 돌린다. **실제 시스템 경로는 건드리지 않는다.**
+# root 가 아니므로 install(1) 의 -o root 에서 멈춘다(exit 5) — 거기까지 갔다는 것이 곧
+# "내용 검사를 전부 지났다" 는 뜻이다.
+run_main() {
+    (
+        . "$REPO_ROOT/scripts/save-config"
+        id() { printf '0\n'; }
+        assert_self_is_safe() { :; }
+        CONFIG_DIR="$WORK_DIR/etc"
+        CONFIG_FILE="$CONFIG_DIR/config.json"
+        main "$@"
+    ) >/dev/null 2>&1
+}
+
+run_main "$STAGED" "$STAGED_DIGEST"
+t_equals "5" "$?" "지문이 맞으면 설치 단계까지 간다"
+run_main "$SWAPPED" "$STAGED_DIGEST"
+t_equals "6" "$?" "지문이 다르면 설치 단계에 닿지 못한다"
+run_main "$STAGED" "$DUMMY_DIGEST"
+t_equals "6" "$?" "형식만 맞는 엉뚱한 지문"
+run_main "$STAGED"
+t_equals "2" "$?" "지문 없이 부른 호출은 root 로도 받지 않는다"
+if [ -e "$WORK_DIR/etc/config.json" ]; then
+    t_fail "검사에 걸린 내용이 설치 자리에 놓였습니다"
+else
+    t_pass
+fi
+
+# 설치는 원본 경로가 아니라 사본에서만 한다. 여기가 갈라지면 위의 방어가 전부 무의미해진다.
+if grep -q 'install -o root -g wheel -m 0644 "\$SOURCE_SNAPSHOT" "\$CONFIG_FILE"' "$REPO_ROOT/scripts/save-config"; then
+    t_pass
+else
+    t_fail "save-config 가 검사한 사본이 아닌 다른 것을 설치합니다"
+fi
+for path_reopen in 'assert_looks_like_config "$source"' 'assert_content_matches "$source"' 'file_digest "$source"'; do
+    if grep -qF "$path_reopen" "$REPO_ROOT/scripts/save-config"; then
+        t_fail "save-config 가 검사를 위해 원본 경로를 다시 엽니다: $path_reopen"
+    else
+        t_pass
+    fi
+done
 
 t_section "uninstall.sh --dry-run"
 uninstall_output=$("$REPO_ROOT/scripts/uninstall.sh" --dry-run 2>&1)

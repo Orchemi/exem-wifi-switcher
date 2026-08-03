@@ -211,6 +211,27 @@ struct ShellScriptTests {
         #expect(!apply.contains("load_profile_values \"$CONFIG_FILE\""))
     }
 
+    /// 인증 창이 떠 있는 동안 준비 파일의 소유자는 root 가 아니다. 그래서 저장할 내용은
+    /// **인증 이전에 확정된 지문**으로 못 박고, 대조도 설치도 fd 로 뜬 root 전용 사본에서만 한다.
+    /// 둘 중 하나만 있으면 구멍이 남는다 — 경로를 다시 열어 대조하면 대조한 것과 설치하는 것이 갈라진다.
+    @Test("save-config 는 검사한 바로 그 바이트를 설치한다")
+    func saveConfigInstallsExactlyWhatItChecked() throws {
+        let saveConfig = try read("scripts/save-config")
+
+        #expect(saveConfig.contains("open_source_snapshot"))
+        #expect(saveConfig.contains("/dev/fd/9"))
+        #expect(saveConfig.contains("assert_content_matches"))
+        #expect(saveConfig.contains("install -o root -g wheel -m 0644 \"$SOURCE_SNAPSHOT\" \"$CONFIG_FILE\""))
+        // 검사를 위해 원본 경로를 다시 여는 자리가 남아 있으면 안 된다.
+        #expect(!saveConfig.contains("assert_looks_like_config \"$source\""))
+        #expect(!saveConfig.contains("file_digest \"$source\""))
+        // 지문 규칙은 앱과 스크립트가 같아야 한다 (한쪽만 넓히면 다른 쪽에서 막힌다).
+        #expect(saveConfig.contains("^[0-9a-f]{64}$"))
+        // 앱이 인증 창을 띄우기 전에 버전을 묻는 자리.
+        #expect(saveConfig.contains("--capabilities"))
+        #expect(saveConfig.contains("sha256"))
+    }
+
     @Test("프로필 이름 길이 상한이 스크립트와 같다")
     func nameLengthLimitMatchesScripts() throws {
         let expected = "PROFILE_NAME_MAX_LENGTH=\(ProfileName.maxLength)"
