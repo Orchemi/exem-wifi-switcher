@@ -78,6 +78,21 @@ struct ShellScriptTests {
         #expect(result.succeeded)
     }
 
+    /// install.sh 의 설치 후 자체 점검이 **사실만 말하는지** 본다.
+    /// 앱의 [설치] 버튼은 이 스크립트를 root 로 부르는데, 그 자리에서 root 에게 규칙을 물으면
+    /// 대답은 언제나 "된다" 라서 틀린 보안 경고가 나왔다 (2026-08-03 실기계).
+    /// **시스템을 건드리지 않는다** — sudoers 도 sudo 도 실제로 부르지 않고,
+    /// 판정 구간만 떼어다 가짜 sudo 의 대답으로 돌린다.
+    @Test("설치 후 자체 점검 검증이 전부 통과한다")
+    func installSudoCheckSuitePasses() throws {
+        let script = RepositoryLayout.root.appendingPathComponent("Tests/shell/install-sudo-check.sh").path
+        let result = try run(["/bin/bash", script])
+        if !result.succeeded {
+            Issue.record("Tests/shell/install-sudo-check.sh 실패\n\(result.standardOutput)\n\(result.standardError)")
+        }
+        #expect(result.succeeded)
+    }
+
     /// 서명·공증 갈림길을 검증한다 (환경변수가 없으면 ad-hoc, 있으면 Developer ID + 공증).
     /// **인증서가 없어도 도는 것만 잰다.** 실제 서명·제출·staple 은 여기서 재지 못한다.
     /// 가짜 인증서 이름으로 계획 출력과 사전 차단만 확인하고, 순서는 파일에서 읽는다.
@@ -108,7 +123,7 @@ struct ShellScriptTests {
                       "scripts/build-app.sh", "scripts/package-release.sh", "scripts/publish-wiki.sh",
                       "Tests/shell/apply-tests.sh", "Tests/shell/version-gate.sh",
                       "Tests/shell/uninstall-dry-run.sh", "Tests/shell/publish-wiki.sh",
-                      "Tests/shell/signing.sh"])
+                      "Tests/shell/signing.sh", "Tests/shell/install-sudo-check.sh"])
     func scriptsHaveValidSyntax(_ relativePath: String) throws {
         let path = RepositoryLayout.root.appendingPathComponent(relativePath).path
         let result = try run(["/bin/bash", "-n", path])
@@ -278,7 +293,8 @@ struct ShellScriptTests {
           arguments: ["scripts/apply", "scripts/install.sh", "scripts/uninstall.sh", "scripts/build-app.sh",
                       "scripts/package-release.sh", "scripts/publish-wiki.sh", "Tests/shell/apply-tests.sh",
                       "Tests/shell/version-gate.sh", "Tests/shell/uninstall-dry-run.sh",
-                      "Tests/shell/publish-wiki.sh", "Tests/shell/signing.sh"])
+                      "Tests/shell/publish-wiki.sh", "Tests/shell/signing.sh",
+                      "Tests/shell/install-sudo-check.sh"])
     func scriptsHaveNoHardcodedHomePath(_ relativePath: String) throws {
         // 문자열을 조립해서 만든다 — 이 파일 자신이 RULES.md 의 사전 점검 grep 에 걸리지 않도록.
         let homePrefix = "/" + "Users" + "/"

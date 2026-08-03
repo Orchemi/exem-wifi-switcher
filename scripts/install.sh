@@ -477,38 +477,100 @@ fi
 
 heading "설치 결과"
 
-# 규칙이 대상 계정에 실제로 걸렸는지 sudo 에게 되묻는다.
+# 규칙이 대상 계정에 실제로 걸렸는지 sudo 에게 되묻는다. **아무 명령도 실행하지 않는다** —
+# 조회(-l)만 한다.
 #
-# root 로 실행 중일 때는 -U 로 대상 계정의 규칙을 조회한다. 이 경우 root 는 애초에 암호를
-# 묻지 않으므로 "무암호인가" 까지는 확인되지 않는다 — 규칙이 그 계정·그 경로·그 인자에
-# 걸리는지까지만 본다. (터미널에서 사용자로 실행하면 -n 이 무암호 여부까지 확인한다)
-sudo_rule_matches() {
+# 아래 두 표식 사이는 Tests/shell/install-sudo-check.sh 가 **그대로 떼어다** 검증한다.
+# 실제로 설치하지 않고 이 판정만 재려면 그 방법뿐이라 표식을 두었다 — 지우거나 옮기지 마라.
+# >>> sudo-rule-check
+# 대상 계정이 이 명령을 어떤 규칙으로 실행하게 되는지 묻는다 (긴 형식 = 규칙 전문).
+#
+# **root 로 실행 중일 때 자기 자신에게 물으면 안 된다.** root 는 무엇이든 암호 없이 되므로
+# 대답은 언제나 "된다" 이고, 그것은 대상 계정에 대해 아무것도 말해 주지 않는다.
+# 앱의 [설치] 버튼이 바로 그 root 경로라, 앱으로 설치한 사람 전원이 "save-config 가 암호 없이
+# 실행됩니다" 라는 **틀린 보안 경고**를 봤다 (2026-08-03 실기계). -U 로 대상 계정을 지목한다.
+#
+# **-l 만으로는 무암호인지 알 수 없다.** 관리자 계정은 %admin ALL=(ALL) ALL 로 무엇이든
+# 실행할 수 있어서, 사용자로 물어도 save-config 가 '열려 있는' 것으로 보인다(같은 오탐).
+# 무암호 규칙에만 붙는 `Options: !authenticate` 는 -ll(긴 형식)에만 찍힌다 —
+# 그래서 종료 코드가 아니라 규칙 전문을 읽는다 (sudo 1.9.17 실측).
+sudo_privilege_entry() {
     if [ "$IS_ROOT" -eq 1 ]; then
-        sudo -n -l -U "$TARGET_USER" "$@" >/dev/null 2>&1
+        LC_ALL=C sudo -n -ll -U "$TARGET_USER" "$@" 2>/dev/null
     else
-        sudo -n -l "$@" >/dev/null 2>&1
+        LC_ALL=C sudo -n -ll "$@" 2>/dev/null
     fi
 }
+
+# 대상 계정이 이 명령을 **암호 없이** 실행할 수 있는가.
+#
+#   0  무암호로 열려 있다
+#   1  암호를 묻는다. 또는 규칙에 걸리지 않는다 (어느 쪽이든 무암호는 아니다)
+#   2  이 자리에서는 확인할 수 없다
+#
+# 셋째 값을 두는 이유: 규칙 조회 자체가 막히는 자리가 있는데, sudo 는 "규칙에 없다" 와
+# "물어볼 수 없다" 를 같은 종료 코드로 알린다. 그때 "암호 없이 실행되지 않습니다" 라고
+# 단정하면 확인하지 않은 것을 확인한 것처럼 말하게 된다. 그래서 목록 조회가 되는지
+# 한 번 더 물어 둘을 가른다.
+sudo_password_state() {
+    local entry
+    if entry=$(sudo_privilege_entry "$@"); then
+        case "$entry" in
+            *'!authenticate'*) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+    sudo_privilege_entry >/dev/null 2>&1 || return 2
+    return 1
+}
+
+# 무암호 여부를 알린다. **apply 는 무암호여야 맞고, save-config 는 아니어야 맞다.**
+report_sudo_rule_state() {
+    local state
+
+    printf '\n  암호 없이 실행되는지 확인:\n'
+
+    state=0
+    sudo_password_state "$APPLY_PATH" dhcp || state=$?
+    case "$state" in
+        0)
+            printf '    apply — 확인됨. 프로필 전환 시 암호를 묻지 않습니다\n'
+            ;;
+        1)
+            printf '    apply — 무암호 규칙이 확인되지 않았습니다. 전환할 때 암호를 물을 수 있습니다.\n'
+            printf '      새 터미널에서 확인:  sudo -ll %s dhcp\n' "$APPLY_PATH"
+            ;;
+        *)
+            printf '    apply — 이 자리에서는 확인하지 못했습니다 (규칙 조회가 막혔습니다).\n'
+            printf '      새 터미널에서 확인:  sudo -ll %s dhcp\n' "$APPLY_PATH"
+            ;;
+    esac
+
+    # save-config 가 무암호로 열려 있으면 설정 파일을 잠근 의미가 사라진다. 그 경우 소리 내어 알린다.
+    state=0
+    sudo_password_state "$SAVE_CONFIG_PATH" || state=$?
+    case "$state" in
+        0)
+            printf '\n    경고: save-config 가 암호 없이 실행됩니다.\n'
+            printf '      %s 에 이 경로를 여는 규칙이 남아 있는지 확인하세요.\n' "$SUDOERS_PATH"
+            printf '      이 상태에서는 설정 파일을 root 소유로 잠근 의미가 없습니다.\n'
+            ;;
+        1)
+            printf '    save-config — 암호 없이 실행되지 않습니다 (의도된 상태입니다)\n'
+            ;;
+        *)
+            printf '    save-config — 이 자리에서는 확인하지 못했습니다 (규칙 조회가 막혔습니다).\n'
+            printf '      새 터미널에서 확인:  sudo -ll %s\n' "$SAVE_CONFIG_PATH"
+            ;;
+    esac
+}
+# <<< sudo-rule-check
 
 if [ "$DRY_RUN" -eq 1 ]; then
     printf '  [dry-run] 아무것도 설치하지 않았습니다.\n'
 else
     ls -l "$APPLY_PATH" "$SAVE_CONFIG_PATH" "$SUDOERS_PATH" "$CONFIG_PATH"
-    printf '\n  암호 없이 실행되는지 확인:\n'
-    if sudo_rule_matches "$APPLY_PATH" dhcp; then
-        printf '    apply — 확인됨. 프로필 전환 시 암호를 묻지 않습니다\n'
-    else
-        printf '    apply — 아직 확인되지 않았습니다. 새 터미널에서 아래 명령으로 다시 확인하세요:\n'
-        printf '      sudo -n -l %s dhcp\n' "$APPLY_PATH"
-    fi
-    # save-config 가 무암호로 열려 있으면 설정 파일을 잠근 의미가 사라진다. 그 경우 소리 내어 알린다.
-    if sudo_rule_matches "$SAVE_CONFIG_PATH"; then
-        printf '\n    경고: save-config 가 암호 없이 실행됩니다.\n'
-        printf '      %s 에 이 경로를 여는 규칙이 남아 있는지 확인하세요.\n' "$SUDOERS_PATH"
-        printf '      이 상태에서는 설정 파일을 root 소유로 잠근 의미가 없습니다.\n'
-    else
-        printf '    save-config — 암호 없이 실행되지 않습니다 (의도된 상태입니다)\n'
-    fi
+    report_sudo_rule_state
 fi
 
 # 다음 할 일도 들어온 길에 따라 갈린다.
