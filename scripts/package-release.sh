@@ -376,16 +376,49 @@ printf '    설치 스크립트 5개 확인\n'
 
 heading "4/6  배포 전 점검"
 
-scan_dirs=("$BUNDLED_SCRIPTS" "$APP_BUNDLE/Contents/Info.plist")
+# **번들 전체를 본다.** 예전에는 스크립트 디렉터리와 Info.plist 두 경로만 봤다.
+# RULES.md 는 "번들 안 텍스트" 라고 적혀 있는데 실제로 보는 것은 그 둘뿐이라, 나머지 자리에
+# 심긴 것은 통째로 지나갔다 — 감사에서 Contents/Resources/notes.txt 에 사내 대역 IP 와
+# 홈 경로를 넣고 재서명했더니 이 단계가 "사내 값 없음" 을 찍고 zip 을 만들어 냈다.
+# 목록을 손으로 맞춰 두는 구조는 build-app.sh 가 무엇을 하나 더 넣는 날 조용히 어긋난다.
+# 훑을 자리를 고르지 말고 **번들을 통째로 넘긴다.**
+scan_dirs=("$APP_BUNDLE")
 
 scan_for() {
     local label="$1" pattern="$2"
     # -I 로 실행 파일·이미지는 건너뛴다 (바이너리에서 우연히 맞는 바이트를 잡지 않는다).
+    # 실행 파일 안은 아래 scan_executables_for_home_path 가 따로 본다.
     if grep -rIniE "$pattern" "${scan_dirs[@]}" >/dev/null 2>&1; then
         err "  걸린 항목:"
         grep -rIniE "$pattern" "${scan_dirs[@]}" >&2 || true
         die "$label 이 번들에 들어 있습니다. 정리한 뒤 다시 묶으세요."
     fi
+}
+
+# 실행 파일 안에 빌드한 사람의 홈 경로가 박혀 있는가.
+#
+# `grep -rI` 는 바이너리를 건너뛰므로 위의 scan_for 로는 영영 잡히지 않는 자리다.
+# **--debug 로 빌드한 실행 파일에는 빌더의 홈 절대경로가 그대로 들어간다** (릴리즈 빌드는 깨끗하다).
+# build-app.sh --debug 로 만든 번들을 --skip-build 로 묶으면 그것이 그대로 배포물이 된다.
+#
+# 파이프로 판정하지 않는다. `grep -q` 는 맞는 순간 끝나 앞의 strings 가 SIGPIPE 로 죽고,
+# pipefail 이 그 실패를 파이프라인의 결과로 삼아 **찾았는데 못 찾은 것으로** 뒤집힌다.
+# 그래서 결과를 변수에 담아 본다.
+scan_executables_for_home_path() {
+    local directory="$APP_BUNDLE/Contents/MacOS" binary found
+    [ -d "$directory" ] || return 0
+    command -v strings >/dev/null || die "strings 를 찾지 못했습니다 (실행 파일을 훑을 수 없어 멈춥니다)"
+
+    while IFS= read -r binary; do
+        # 홈 경로 패턴은 문자 클래스로 적는다 (아래 scan_for 와 같은 이유다).
+        found=$(strings -a -- "$binary" | grep -E '/[U]sers/' || true)
+        [ -n "$found" ] || continue
+        err "  걸린 항목: $binary"
+        printf '%s\n' "$found" | head -5 >&2
+        die "실행 파일에 사용자 홈 절대경로가 박혀 있습니다. --debug 로 빌드한 번들을 묶고 있지 않은지 보세요."
+    done <<EOF
+$(find "$directory" -type f)
+EOF
 }
 
 scan_for "MAC 주소로 보이는 값" '([0-9a-f]{2}:){5}[0-9a-f]{2}'
@@ -396,9 +429,13 @@ scan_for "사내 대역으로 보이는 IP" '\b10\.[0-9]{1,3}\.|\b192\.168\.[0-9
 # 홈 경로 패턴은 문자 클래스로 적는다 — 이 파일 자신이 RULES.md 의 사전 점검 grep 에 걸리지 않도록.
 # 정규식으로는 [U] 가 U 와 같으므로 찾는 대상은 그대로다.
 scan_for "사용자 홈 절대경로" '/[U]sers/'
+scan_executables_for_home_path
 
 # 사용자 설정 파일은 /usr/local/etc 에만 있어야 한다. 번들에 들어가면 남의 값을 배포하게 된다.
-if [ -e "$BUNDLED_SCRIPTS/config.json" ]; then
+# 스크립트 자리만 보지 않는다 — 번들 어디에 있어도 배포되는 것은 마찬가지다.
+CONFIG_IN_BUNDLE=$(find "$APP_BUNDLE" -name 'config.json' -print -quit)
+if [ -n "$CONFIG_IN_BUNDLE" ]; then
+    err "  걸린 항목: $CONFIG_IN_BUNDLE"
     die "번들에 config.json 이 있습니다 (예시 파일만 들어가야 합니다)"
 fi
 if find "$APP_BUNDLE" -name '.DS_Store' -print -quit | grep -q .; then

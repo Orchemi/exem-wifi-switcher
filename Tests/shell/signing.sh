@@ -542,6 +542,115 @@ t_section "제출용 zip 과 배포용 zip 은 다른 파일이다"
 t_grep "제출용 zip 을 따로 만든다" "$PACKAGE_RELEASE" 'SUBMISSION_ZIP='
 t_grep_absent "제출에 배포용 zip 을 쓰지 않는다" "$PACKAGE_RELEASE" 'notarytool submit "\$ARCHIVE"'
 
+# --- 배포 전 점검이 실제로 잡는가 ------------------------------------------------
+#
+# 위의 검사들은 게이트의 **순서와 모양**만 본다. 패턴이 아무것도 잡지 못해도 전부 통과한다.
+# RULES.md 는 패턴이 너무 넓어 릴리즈를 통째로 막은 사고를 기록하지만, 그 반대 —
+# **아무것도 잡지 못하는 쪽** — 에는 그물이 없었다. 실제로 감사에서 번들의
+# Contents/Resources 에 사내 대역 IP 와 홈 경로를 심고 재서명했더니, 배포 전 점검이
+# "사내 값·설정 파일·찌꺼기 없음" 을 찍고 zip 을 그대로 만들어 냈다. 훑는 자리가
+# 스크립트 디렉터리와 Info.plist 둘로 손으로 적혀 있었기 때문이다.
+#
+# 그래서 여기서는 **심어 보고 막히는지** 잰다.
+#
+# 앱을 빌드하지 않는다. 이 단계가 보는 것은 조립된 번들의 파일들이므로, 같은 모양의 최소
+# 번들을 만들어 ad-hoc 서명하면 4/6 까지 그대로 걸어 들어간다 (빌드는 몇 분이고 이것은 몇 초다).
+# 심는 값은 조각으로 만들어 넣는다 — 이 파일 자신이 RULES.md 의 커밋 전 점검에 걸리지 않게.
+
+PROBE_SOURCE="$SCRATCH/probe-bundle"
+PROBE_APP="$PROBE_SOURCE/EXEM Wifi Switcher.app"
+# 홈 경로와 사내 대역 IP 를 글자 그대로 적지 않고 조각을 이어 만든다. 심는 값은 그대로다.
+PROBE_HOME_PATH="/$(printf 'U')sers/nobody/build"
+PROBE_PRIVATE_IP="10.$(printf '77').0.1"
+PROBE_DOC_IP="192.0.2.10"
+
+make_probe_bundle() {
+    local version
+    version=$(bash "$BUILD_APP" --print-version)
+    mkdir -p "$PROBE_APP/Contents/MacOS" "$PROBE_APP/Contents/Resources/scripts"
+    cat > "$PROBE_APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>probe-app</string>
+<key>CFBundleIdentifier</key><string>com.example.probe</string>
+<key>CFBundleName</key><string>probe</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>$version</string>
+<key>CFBundleVersion</key><string>$version</string>
+</dict></plist>
+PLIST
+    # 실행 파일 자리. NUL 을 넣어 grep -I 가 바이너리로 보고 건너뛰게 한다
+    # (실행 파일 안을 보는 것은 strings 쪽 검사다).
+    printf 'MZ\000probe\000' > "$PROBE_APP/Contents/MacOS/probe-app"
+    chmod +x "$PROBE_APP/Contents/MacOS/probe-app"
+    # 번들이 품어야 할 다섯. 실제 파일을 그대로 쓴다 (이것들이 점검을 통과하는지도 함께 잰다).
+    for f in install.sh uninstall.sh apply save-config; do
+        cp "$REPO_ROOT/scripts/$f" "$PROBE_APP/Contents/Resources/scripts/"
+    done
+    cp "$REPO_ROOT/config.example.json" "$PROBE_APP/Contents/Resources/scripts/"
+}
+
+# t_release_scan <block|pass> <설명> <심는 함수>
+t_release_scan() {
+    local expect="$1" label="$2" plant="$3"
+    local dir status output
+    dir=$(mktemp -d)
+    ditto "$PROBE_APP" "$dir/EXEM Wifi Switcher.app"
+    "$plant" "$dir/EXEM Wifi Switcher.app"
+
+    if ! codesign -f -s - "$dir/EXEM Wifi Switcher.app" >/dev/null 2>&1; then
+        t_fail "$label: 프로브 번들에 ad-hoc 서명을 하지 못했습니다"
+        rm -rf "$dir"
+        return
+    fi
+
+    output=$(env -u SIGN_IDENTITY -u NOTARY_PROFILE \
+        bash "$PACKAGE_RELEASE" --skip-build --output "$dir" 2>&1)
+    status=$?
+    rm -rf "$dir"
+
+    if [ "$expect" = "block" ] && [ "$status" -eq 0 ]; then
+        t_fail "$label: 심었는데 그대로 zip 이 만들어졌습니다
+$output"
+    elif [ "$expect" = "pass" ] && [ "$status" -ne 0 ]; then
+        t_fail "$label: 막을 것이 없는데 멈췄습니다 (종료코드 $status)
+$output"
+    else
+        t_pass
+    fi
+}
+
+plant_nothing()      { :; }
+plant_private_ip()   { printf '서버 %s\n' "$PROBE_PRIVATE_IP" > "$1/Contents/Resources/notes.txt"; }
+plant_home_path()    { printf '빌드 위치 %s\n' "$PROBE_HOME_PATH" > "$1/Contents/Resources/notes.txt"; }
+plant_documented_ip() { printf '예시 주소 %s\n' "$PROBE_DOC_IP" > "$1/Contents/Resources/notes.txt"; }
+plant_config_json()  { printf '{ "version": 1 }\n' > "$1/Contents/Resources/config.json"; }
+plant_ds_store()     { printf 'junk\n' > "$1/Contents/Resources/.DS_Store"; }
+# --debug 로 빌드한 실행 파일에는 빌더의 홈 절대경로가 박힌다. 그 모양만 흉내 낸다.
+plant_home_path_in_executable() {
+    printf 'MZ\000probe\000%s\000end' "$PROBE_HOME_PATH" > "$1/Contents/MacOS/probe-app"
+    chmod +x "$1/Contents/MacOS/probe-app"
+}
+
+t_section "배포 전 점검이 심은 값을 실제로 잡는다"
+make_probe_bundle
+t_release_scan pass  "깨끗한 번들은 지나간다" plant_nothing
+t_release_scan block "Resources 에 심은 사내 대역 IP 를 잡는다" plant_private_ip
+t_release_scan block "Resources 에 심은 홈 절대경로를 잡는다" plant_home_path
+t_release_scan block "스크립트 자리 밖의 config.json 을 잡는다" plant_config_json
+t_release_scan block ".DS_Store 를 잡는다" plant_ds_store
+# grep -rI 는 바이너리를 건너뛴다. 이 자리는 strings 로 따로 보지 않으면 어떤 게이트에도 안 걸린다.
+t_release_scan block "실행 파일 안의 홈 절대경로를 잡는다" plant_home_path_in_executable
+# 패턴을 넓히다 여기가 걸리면 릴리즈가 통째로 막힌다. 문서용 예약 대역은 반드시 지나가야 한다.
+t_release_scan pass  "문서용 예약 대역은 지나간다" plant_documented_ip
+
+# 훑는 자리를 손으로 적어 두지 않는다. build-app.sh 가 무엇을 하나 더 넣는 날 조용히 어긋난다.
+t_grep "번들 전체를 훑는다" "$PACKAGE_RELEASE" 'scan_dirs=\("\$APP_BUNDLE"\)'
+t_grep "실행 파일 안은 strings 로 본다" "$PACKAGE_RELEASE" 'strings -a -- "\$binary"'
+# grep -q 로 판정하면 SIGPIPE + pipefail 이 '찾았다' 를 '못 찾았다' 로 뒤집는다.
+t_grep_absent "실행 파일 검사를 grep -q 파이프로 판정하지 않는다" "$PACKAGE_RELEASE" 'strings .*\| *grep -q'
+
 # --- 기본 경로 무회귀 ---------------------------------------------------------------
 #
 # 환경변수가 없을 때 예전과 같은 말을 하는지 본다. 문구가 바뀌면 릴리즈 노트에 옮겨 적는
