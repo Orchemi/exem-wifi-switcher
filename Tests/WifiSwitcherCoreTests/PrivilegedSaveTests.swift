@@ -371,6 +371,23 @@ struct PrivilegedSaveTests {
         }
     }
 
+    /// 권한 표도 **같은 물음**으로 스크립트 버전을 본다 (`PermissionInput.saveConfigAcceptsDigest`).
+    /// 저장이 막히는 근거와 화면이 '설치됨' 을 적는 근거가 갈리면, 화면은 다 됐다고 하는데
+    /// 저장은 재설치를 안내하고 재설치할 손잡이는 어디에도 없는 상태가 된다 (2026-08-03 실측).
+    @Test("스크립트 버전 판정이 예전 것과 지금 것을 갈라 본다")
+    func helperVersionProbeAnswersBothWays() throws {
+        // 예전 save-config 는 `--capabilities` 를 저장할 경로로 읽고 exit 2 로 죽는다.
+        try withInstalledHelper(body: "#!/bin/bash\nexit 2\n") { helper in
+            #expect(!ConfigInstaller.helperAcceptsDigest(helper))
+        }
+        // 지금 계약을 아는 스크립트는 `sha256` 이라고 답한다 (기본 본문).
+        try withInstalledHelper { helper in
+            #expect(ConfigInstaller.helperAcceptsDigest(helper))
+        }
+        // 판단이 서지 않으면 아직 모르는 것으로 본다 — 없는 파일에 인증 창을 띄우지 않는다.
+        #expect(!ConfigInstaller.helperAcceptsDigest("/nonexistent/save-config"))
+    }
+
     @Test("root 로 돌고 있으면 인증 없이 직접 쓴다")
     func writesDirectlyWhenAlreadyRoot() throws {
         let directory = FileManager.default.temporaryDirectory

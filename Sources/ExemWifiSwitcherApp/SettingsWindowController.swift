@@ -962,6 +962,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         do {
             try ConfigInstaller().save(config)
         } catch {
+            // **실패한 자리에서 화면을 다시 읽는다.** 저장이 막혔다는 것은 시스템이 화면의
+            // 판정과 다르다는 뜻이다 (설치된 스크립트가 오래됐다 · 그 사이에 지워졌다).
+            // 다시 읽으면 권한 표가 그 사실을 적고, 고칠 [설치] 버튼이 그 줄에 선다.
+            refreshPermissions()
             presentSaveFailure(error)
             return
         }
@@ -1047,13 +1051,42 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     }
 
     /// 저장이 왜 안 됐는지, 그래서 지금 시스템이 어떤 상태인지 분명히 말한다.
+    ///
+    /// **다시 설치하면 풀리는 실패에는 그 자리에 버튼을 둔다.** 권한 표에도 같은 [설치] 가
+    /// 서지만(위 `refreshPermissions`), 이 알림은 사용자가 저장을 누른 **그 순간** 떠 있고
+    /// 창의 아래쪽 표를 가리고 있다. 필요한 순간에 필요한 손잡이를 그 자리에 두는 쪽이
+    /// "아래 권한 항목에서 [설치] 를 누르세요" 라고 적고 사라지는 것보다 낫다.
     private func presentSaveFailure(_ error: Error) {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = saveFailureTitle(error)
         alert.informativeText = "\(error)"
+
+        if reinstallFixes(error), InstallerService.isAvailable {
+            alert.addButton(withTitle: "다시 설치")
+            alert.addButton(withTitle: "확인")
+            show(alert) { [weak self] response in
+                guard response == .alertFirstButtonReturn else { return }
+                self?.beginInstaller(.install)
+            }
+            return
+        }
+
         alert.addButton(withTitle: "확인")
-        alert.beginSheetModal(for: window!, completionHandler: nil)
+        show(alert)
+    }
+
+    /// 이 실패가 **다시 설치하면 풀리는 것**인가.
+    ///
+    /// 둘뿐이다 — 스크립트가 없거나(`helperMissing`), 지금 앱보다 오래됐거나(`helperOutdated`).
+    /// 나머지(인증 취소 · 관리자 아님 · 값 오류)는 설치로 달라지지 않으므로 버튼을 내밀지 않는다.
+    /// **할 수 없는 것을 할 수 있는 척하지 않는다** — 권한 표가 지키는 규칙과 같다.
+    private func reinstallFixes(_ error: Error) -> Bool {
+        guard let error = error as? ConfigInstaller.SaveError else { return false }
+        switch error {
+        case .helperMissing, .helperOutdated: return true
+        default: return false
+        }
     }
 
     private func saveFailureTitle(_ error: Error) -> String {

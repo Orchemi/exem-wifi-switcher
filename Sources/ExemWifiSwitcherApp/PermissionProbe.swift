@@ -23,6 +23,7 @@ enum PermissionProbe {
             applyInstalled: install.apply,
             sudoersInstalled: install.sudoers,
             saveConfigInstalled: install.saveConfig,
+            saveConfigAcceptsDigest: install.saveConfigAcceptsDigest,
             isAdministrator: install.administrator,
             installerAvailable: install.installer,
             location: location,
@@ -42,6 +43,7 @@ enum PermissionProbe {
             applyInstalled: install.apply,
             sudoersInstalled: install.sudoers,
             saveConfigInstalled: install.saveConfig,
+            saveConfigAcceptsDigest: install.saveConfigAcceptsDigest,
             isAdministrator: install.administrator,
             installerAvailable: install.installer,
             location: location,
@@ -54,15 +56,30 @@ enum PermissionProbe {
 
     /// 파일이 놓여 있는지만 본다. `sudo` 를 시험 삼아 실행하지 않는다 —
     /// 상태를 보려고 권한 동작을 실제로 돌리는 것은 진단이 할 일이 아니다.
+    ///
+    /// **`save-config --capabilities` 하나는 예외다.** 그것은 권한 동작이 아니라 질문이다 —
+    /// root 가 필요 없고 아무것도 건드리지 않으며, 저장 경로가 인증 창을 띄우기 전에 묻는
+    /// 바로 그 물음이다 (`ConfigInstaller.helperAcceptsDigest`). 이 답이 없으면 권한 표는
+    /// 예전 버전이 깔린 상태를 '설치됨' 으로 적고, 저장은 재설치하라며 막는다.
+    ///
+    /// **값은 캐시하지 않는다.** 이 자리는 이미 갱신마다 `id -Gn` 을 띄우는데,
+    /// 같은 기계에서 20회 반복 측정하면 `--capabilities` 가 그보다 오히려 싸다
+    /// (3.6ms 대 4.6ms, 2026-08-03 실측). 캐시를 두면 앱 밖에서 재설치한 사실을
+    /// 알아채지 못하는 쪽이 더 비싼 문제가 된다.
     private static func installState()
-        -> (apply: Bool, sudoers: Bool, saveConfig: Bool, administrator: Bool, installer: Bool)
+        -> (apply: Bool, sudoers: Bool, saveConfig: Bool, saveConfigAcceptsDigest: Bool,
+            administrator: Bool, installer: Bool)
     {
         let manager = FileManager.default
+        let saveConfig = manager.isExecutableFile(atPath: InstallPaths.saveConfigScript)
         return (
             apply: manager.isExecutableFile(atPath: InstallPaths.applyScript),
             // 파일 내용은 root 만 읽을 수 있지만(0440), 있는지 없는지는 확인할 수 있다.
             sudoers: manager.fileExists(atPath: InstallPaths.sudoersFile),
-            saveConfig: manager.isExecutableFile(atPath: InstallPaths.saveConfigScript),
+            saveConfig: saveConfig,
+            // 없는 파일에는 묻지 않는다 — 답이 뻔한 물음에 프로세스를 하나 더 띄우지 않는다.
+            saveConfigAcceptsDigest: saveConfig
+                && ConfigInstaller.helperAcceptsDigest(InstallPaths.saveConfigScript),
             administrator: PrivilegedShell.currentUserIsAdministrator(),
             installer: bundledInstallerAvailable()
         )

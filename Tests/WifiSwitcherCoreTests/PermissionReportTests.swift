@@ -13,6 +13,7 @@ struct PermissionReportTests {
         applyInstalled: Bool = true,
         sudoersInstalled: Bool = true,
         saveConfigInstalled: Bool = true,
+        saveConfigAcceptsDigest: Bool = true,
         isAdministrator: Bool = true,
         installerAvailable: Bool = true,
         location: LocationAuthorizationState = .granted,
@@ -23,6 +24,7 @@ struct PermissionReportTests {
             applyInstalled: applyInstalled,
             sudoersInstalled: sudoersInstalled,
             saveConfigInstalled: saveConfigInstalled,
+            saveConfigAcceptsDigest: saveConfigAcceptsDigest,
             isAdministrator: isAdministrator,
             installerAvailable: installerAvailable,
             location: location,
@@ -128,6 +130,41 @@ struct PermissionReportTests {
     func savingMissingHelperComesFirst() {
         let item = item(.saving, input(saveConfigInstalled: false, isAdministrator: false))
         #expect(item.remedy == .install)
+    }
+
+    /// **앱만 새로 받은 사람이 겪는 자리다** (2026-08-03 실측).
+    ///
+    /// 예전 버전의 `save-config` 가 그대로 남아 있으면 저장은 `helperOutdated` 로 막히는데,
+    /// 권한 표는 파일이 있다는 이유로 '설치됨' 이라고 적었다. 그래서 **안내는 재설치하라는데
+    /// 재설치할 자리가 화면에 없었다** — 남은 길은 [앱 삭제…] 로 전부 지우고 처음부터 하거나
+    /// 번들 안 스크립트 경로를 알아내 터미널로 부르는 것뿐이었다. 동료 배포에서 성립하지 않는다.
+    @Test("설치된 저장 스크립트가 오래됐으면 설치됨이라고 적지 않는다")
+    func savingHelperOutdated() {
+        let outdated = item(.saving, input(saveConfigAcceptsDigest: false))
+        #expect(outdated.state == .actionNeeded)
+        #expect(outdated.status != item(.saving, input()).status)
+        // 새 손잡이를 만들지 않는다 — 이미 있는 [설치] 버튼이 그대로 서면 된다.
+        // 그 버튼은 계획 미리보기 → 확인 → 관리자 인증 → install.sh 를 이미 들고 있다.
+        #expect(outdated.remedy == .install)
+        // 상태만 봐서는 알 수 없는 사실이다. 무엇이 막히는지 한 줄로 말한다.
+        #expect(outdated.note?.contains("저장") == true)
+        #expect(outdated.details?.contains("오래") == true)
+    }
+
+    @Test("오래된 저장 스크립트도 번들 밖에서는 설치할 수 있는 척하지 않는다")
+    func savingHelperOutdatedWithoutBundledInstaller() {
+        let item = item(.saving, input(saveConfigAcceptsDigest: false, installerAvailable: false))
+        #expect(item.remedy == .runCommand(PermissionReport.installCommand))
+    }
+
+    /// 판정 순서는 **저장 경로가 막히는 순서와 같아야 한다** (`ConfigInstaller.save`).
+    /// 그쪽은 파일 유무 → 관리자 여부 → 지문 계약 순으로 막는다. 표가 다른 순서로 말하면
+    /// 화면이 가리키는 조치와 실제로 걸리는 자리가 어긋난다.
+    @Test("관리자가 아닌 계정에는 오래된 스크립트보다 계정 사실을 먼저 말한다")
+    func savingOrderFollowsTheSavePath() {
+        let item = item(.saving, input(saveConfigAcceptsDigest: false, isAdministrator: false))
+        #expect(item.remedy == .none)
+        #expect(item.advice?.contains("관리자") == true)
     }
 
     // MARK: - 되돌리기
@@ -251,6 +288,7 @@ struct PermissionReportTests {
             input(applyInstalled: false, sudoersInstalled: false),
             input(sudoersInstalled: false),
             input(saveConfigInstalled: false),
+            input(saveConfigAcceptsDigest: false),
             input(isAdministrator: false),
             input(location: .denied),
             input(location: .notDetermined),
@@ -371,6 +409,17 @@ struct PermissionSourceParityTests {
         ] {
             #expect(try source(path).contains("PermissionReport"), "\(path) 가 권한 판정을 따로 만들고 있다")
         }
+    }
+
+    /// 권한 표가 '저장할 수 있다' 고 적는 근거와, 저장이 실제로 막히는 근거가 **같은 물음**이어야 한다.
+    ///
+    /// 갈라지면 그 자리는 조용하다 — 화면은 '설치됨' 이라 적고 저장은 재설치를 안내하는데,
+    /// 재설치할 손잡이는 화면 판정이 내주는 것이라 어디에도 없다 (2026-08-03 실측).
+    /// 그래서 관측하는 쪽이 **저장 경로와 같은 함수**를 부르는지 소스로 확인한다.
+    @Test("권한 표가 저장 경로와 같은 물음으로 스크립트 버전을 본다")
+    func permissionProbeAsksTheSaveQuestion() throws {
+        let probe = try source("Sources/ExemWifiSwitcherApp/PermissionProbe.swift")
+        #expect(probe.contains("helperAcceptsDigest"), "권한 표가 스크립트 버전을 따로 판정하고 있다")
     }
 
     @Test("진단이 권한 문구를 스스로 만들지 않는다")

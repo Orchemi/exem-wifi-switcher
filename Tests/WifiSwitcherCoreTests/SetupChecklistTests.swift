@@ -406,6 +406,12 @@ struct SetupChecklistTests {
                         applyInstalled: apply,
                         sudoersInstalled: sudoers,
                         saveConfigInstalled: saveConfig,
+                        // 저장 스크립트가 **오래됐는가**는 이 대조의 축이 아니다. 메뉴 머리말은
+                        // '아직 시작하지 못한 사람' 을 부르는 자리이고, 예전 버전이 깔린 사람은
+                        // 전환도 자동 전환도 되는 사람이다 — 그에게 '초기 설정하기' 를 다시
+                        // 띄우는 것은 사실이 아니다. 그 상태를 말하고 고칠 손잡이를 내미는
+                        // 자리는 설정 창의 권한 표 하나다 (`PermissionReport.saving`).
+                        saveConfigAcceptsDigest: true,
                         // 관리자 계정 여부는 초기 설정 판정에 넣지 않는다 — 설치로 해결되지 않는 것을
                         // 할 일로 적어 두면 그 계정에서는 머리말이 영영 내려가지 않는다.
                         isAdministrator: true,
@@ -435,6 +441,7 @@ struct SetupChecklistTests {
                     applyInstalled: true,
                     sudoersInstalled: true,
                     saveConfigInstalled: true,
+                    saveConfigAcceptsDigest: true,
                     isAdministrator: true,
                     installerAvailable: true,
                     location: location,

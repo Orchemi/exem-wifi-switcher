@@ -243,6 +243,17 @@ public struct PermissionInput: Equatable, Sendable {
     /// sudoers 무암호 규칙 파일이 있는가. 스크립트만 있고 규칙이 없으면 전환할 때마다 암호를 묻는다
     public var sudoersInstalled: Bool
     public var saveConfigInstalled: Bool
+    /// 설치된 `save-config` 가 **지금 앱의 계약**(지문 인자)을 아는가.
+    ///
+    /// 파일이 놓여 있다는 것과 그 파일이 쓸 수 있는 것이라는 것은 다른 말이다. 앱만 새로
+    /// 받은 사용자에게는 예전 버전이 그대로 남아 있고, 그것은 지문 인자를 모른다 —
+    /// 저장은 `SaveError.helperOutdated` 로 막히는데 권한 표는 '설치됨' 이라고 적었다.
+    /// **그래서 재설치하라는 안내만 있고 재설치할 자리가 없는 상태가 났다** (2026-08-03 실측).
+    ///
+    /// 판정에 쓰는 값은 저장 경로가 쓰는 것과 **같은 물음**이다
+    /// (`ConfigInstaller.helperAcceptsDigest`). 두 자리가 각자 물으면 화면은 된다고 하는데
+    /// 저장은 안 되는 상태로 다시 갈라진다.
+    public var saveConfigAcceptsDigest: Bool
     /// 지금 계정이 관리자 그룹인가. 아니면 설정 저장이 원리상 불가능하다
     public var isAdministrator: Bool
     /// 번들 안에 설치 스크립트가 있는가. 없으면(번들 밖 실행) 앱이 설치를 대신할 수 없다
@@ -261,6 +272,7 @@ public struct PermissionInput: Equatable, Sendable {
         applyInstalled: Bool,
         sudoersInstalled: Bool,
         saveConfigInstalled: Bool,
+        saveConfigAcceptsDigest: Bool,
         isAdministrator: Bool,
         installerAvailable: Bool,
         location: LocationAuthorizationState,
@@ -270,6 +282,7 @@ public struct PermissionInput: Equatable, Sendable {
         self.applyInstalled = applyInstalled
         self.sudoersInstalled = sudoersInstalled
         self.saveConfigInstalled = saveConfigInstalled
+        self.saveConfigAcceptsDigest = saveConfigAcceptsDigest
         self.isAdministrator = isAdministrator
         self.installerAvailable = installerAvailable
         self.location = location
@@ -398,6 +411,26 @@ public struct PermissionReport: Equatable, Sendable {
                 details: "지금 계정이 관리자 그룹이 아닙니다. 설치로는 해결되지 않습니다 — "
                     + "관리자 계정에서 값을 저장하세요.",
                 remedy: .none
+            )
+        }
+        // **파일이 있다는 것과 쓸 수 있다는 것은 다른 말이다.** 앱만 새로 받은 사용자에게는
+        // 예전 버전이 남아 있고, 그것은 지문 인자를 모른다 — 저장은 그 자리에서 막힌다.
+        // 여기서 '설치됨' 이라고 적으면 **재설치하라는 안내만 있고 재설치할 자리가 없는 상태**가
+        // 된다 (2026-08-03 실측). 상태를 사실대로 적으면 이미 있는 [설치] 버튼이 그대로 선다.
+        //
+        // 막는 순서는 저장 경로와 같다 (`ConfigInstaller.save` — 파일 → 관리자 → 지문 계약).
+        // 표가 다른 순서로 말하면 화면이 가리키는 조치와 실제로 걸리는 자리가 어긋난다.
+        guard input.saveConfigAcceptsDigest else {
+            let install = installRemedy(input)
+            return PermissionItem(
+                subject: .saving,
+                state: .actionNeeded,
+                status: "오래됨",
+                advice: [install.advice, "저장 막힘 · 다시 설치하면 해결"]
+                    .compactMap { $0 }.joined(separator: " · "),
+                details: "설치된 저장 스크립트가 지금 앱보다 오래돼 값을 저장할 수 없습니다. "
+                    + "다시 설치하면 지금 앱에 맞는 스크립트로 바뀝니다.",
+                remedy: install.remedy
             )
         }
         return PermissionItem(
