@@ -90,6 +90,7 @@ public enum ValidationError: Error, Equatable, CustomStringConvertible {
     case duplicateProfileName(String)
     case duplicateSSID(String)
     case unknownDefaultProfile(String)
+    case manualDefaultProfile(String)
     case emptyProfileList
     case invalidServiceName(String)
     case unsupportedVersion(Int)
@@ -128,6 +129,10 @@ public enum ValidationError: Error, Equatable, CustomStringConvertible {
             return "Wi-Fi 이름 '\(ssid)' 이 여러 프로필에 지정돼 어느 쪽을 쓸지 알 수 없습니다"
         case .unknownDefaultProfile(let name):
             return "기본 프로필 '\(name)' 이 프로필 목록에 없습니다"
+        case .manualDefaultProfile(let name):
+            return "기본 프로필은 DHCP 프로필이어야 하는데 '\(name)' 은 고정 IP 프로필입니다. "
+                + "기본 프로필은 목록에 적지 않은 모든 Wi-Fi(집·카페·호텔)에 적용되므로, "
+                + "고정 IP 를 두면 그런 곳에서 인터넷이 끊기고 사내 네트워크 값이 그 네트워크에 드러납니다"
         case .emptyProfileList:
             return "프로필이 하나도 없습니다"
         case .invalidServiceName(let name):

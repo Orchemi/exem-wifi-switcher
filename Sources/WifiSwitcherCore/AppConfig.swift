@@ -82,7 +82,16 @@ public struct AppConfig: Codable, Equatable, Sendable {
             }
         }
 
-        if profile(named: defaultProfile) == nil {
+        // 기본 프로필은 **어느 SSID 에도 걸리지 않을 때** 적용된다 (`profile(forSSID:)`).
+        // 집·카페·호텔처럼 등록하지 않은 네트워크가 전부 이리로 온다. 그 자리에 고정 IP 프로필이
+        // 앉으면 사내 IP·서브넷·라우터·DNS 가 그 네트워크에 그대로 걸려 인터넷이 끊기고,
+        // 사내 대역이 남의 망에 드러난다. 손편집을 안내하는 파일이라 실제로 일어난다 —
+        // 규칙으로 막는다 (`OnboardingSetup.makeConfig` 의 같은 판단을 코드로 강제한 것이다).
+        if let target = profile(named: defaultProfile) {
+            if target.mode != .dhcp {
+                errors.append(.manualDefaultProfile(defaultProfile))
+            }
+        } else {
             errors.append(.unknownDefaultProfile(defaultProfile))
         }
         return errors

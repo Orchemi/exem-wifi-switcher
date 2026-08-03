@@ -106,6 +106,65 @@ struct AppConfigTests {
         #expect(config.validate().contains(.unknownDefaultProfile("office")))
     }
 
+    /// 기본 프로필은 **어느 SSID 에도 걸리지 않을 때** 적용된다 — 집·카페·호텔이 전부 여기로 온다.
+    /// 그 자리에 고정 IP 프로필이 앉으면 등록하지 않은 모든 네트워크에 사내 IP·DNS 가 걸린다.
+    @Test("기본 프로필이 고정 IP 프로필이면 잡는다")
+    func detectsManualDefaultProfile() {
+        let config = AppConfig(
+            profiles: [
+                NetworkProfile(
+                    name: "office", mode: .manual, ip: "192.0.2.10", subnet: "255.255.255.0",
+                    router: "192.0.2.1", dns: ["192.0.2.53"], ssids: ["EXAMPLE-AP"]
+                ),
+                NetworkProfile(name: "auto", mode: .dhcp),
+            ],
+            defaultProfile: "office"
+        )
+        #expect(config.validate().contains(.manualDefaultProfile("office")))
+    }
+
+    @Test("기본 프로필이 DHCP 프로필이면 통과한다")
+    func acceptsDHCPDefaultProfile() {
+        let config = AppConfig(
+            profiles: [
+                NetworkProfile(
+                    name: "office", mode: .manual, ip: "192.0.2.10", subnet: "255.255.255.0",
+                    router: "192.0.2.1", dns: ["192.0.2.53"], ssids: ["EXAMPLE-AP"]
+                ),
+                NetworkProfile(name: "auto", mode: .dhcp),
+            ],
+            defaultProfile: "auto"
+        )
+        #expect(config.validate().isEmpty)
+    }
+
+    /// 존재하지 않는 이름은 **예전 그대로** `unknownDefaultProfile` 이다.
+    /// 새 규칙이 그 판정을 가로채면 "이름이 틀렸다" 를 "고정 IP 다" 로 잘못 안내하게 된다.
+    @Test("기본 프로필 이름이 없을 때는 모드 규칙이 끼어들지 않는다")
+    func unknownDefaultProfileStaysUnknown() {
+        let config = AppConfig(profiles: [NetworkProfile(name: "auto", mode: .dhcp)], defaultProfile: "nowhere")
+        let errors = config.validate()
+        #expect(errors.contains(.unknownDefaultProfile("nowhere")))
+        #expect(!errors.contains(.manualDefaultProfile("nowhere")))
+    }
+
+    @Test("고정 IP 를 기본 프로필로 둔 설정은 읽어들이지 않는다")
+    func refusesLoadingManualDefaultProfile() throws {
+        let json = """
+        {
+          "version": 1, "service": "Wi-Fi", "defaultProfile": "office",
+          "profiles": [
+            { "name": "office", "mode": "manual", "ip": "192.0.2.10", "subnet": "255.255.255.0",
+              "router": "192.0.2.1", "dns": ["192.0.2.53"], "ssids": ["EXAMPLE-AP"] },
+            { "name": "auto", "mode": "dhcp", "dns": [], "ssids": [] }
+          ]
+        }
+        """
+        try withTemporaryFile(contents: json) { path in
+            #expect(throws: (any Error).self) { try AppConfig.load(from: path) }
+        }
+    }
+
     @Test("프로필이 하나도 없으면 잡는다")
     func detectsEmptyProfileList() {
         let config = AppConfig(profiles: [], defaultProfile: "auto")

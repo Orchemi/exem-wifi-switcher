@@ -346,8 +346,12 @@ public enum OnboardingSetup {
         }
 
         // 어느 SSID 에도 걸리지 않을 때는 DHCP 로 둔다. 사외에서 인터넷이 끊기지 않는 쪽이 안전하다.
+        //
+        // 이름이 없을 때뿐 아니라 **고정 IP 프로필을 가리킬 때도** 되돌린다. 손편집으로 그렇게 된
+        // 설정을 그대로 물려받으면 `AppConfig.validate()` 가 `.manualDefaultProfile` 로 거부해
+        // 온보딩 저장이 통째로 막힌다 — 사용자가 창에서 고칠 방법이 없는 값이라 여기서 바로잡는다.
         var defaultProfile = existing?.defaultProfile ?? autoProfileName
-        if !profiles.contains(where: { $0.name == defaultProfile }) {
+        if profiles.first(where: { $0.name == defaultProfile })?.mode != .dhcp {
             defaultProfile = autoProfileName
         }
 

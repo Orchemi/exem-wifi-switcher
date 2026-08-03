@@ -370,6 +370,21 @@ struct ProfileDraftTests {
         #expect(config.profiles.count == 3)
     }
 
+    @Test("손으로 고정 IP 를 기본 프로필로 바꿔 둔 설정은 DHCP 로 되돌린다")
+    func repairsManualDefaultProfile() throws {
+        // 손편집으로 defaultProfile 이 고정 IP 프로필을 가리키게 되면, 온보딩이 그것을 물려받는 순간
+        // 저장 자체가 막힌다(AppConfig.validate 가 거부한다). 물려받지 말고 DHCP 로 되돌린다.
+        var handEdited = Self.existingConfig
+        handEdited.defaultProfile = "office"
+
+        let office = try draft(ssids: "EXAMPLE-AP").makeProfile(name: OnboardingSetup.officeProfileName,
+                                                                label: "사내 고정 IP").get()
+
+        let config = OnboardingSetup.makeConfig(service: "Wi-Fi", office: office, existing: handEdited)
+        #expect(config.defaultProfile == "auto")
+        #expect(config.validate().isEmpty)
+    }
+
     @Test("Wi-Fi 이름을 지우고 저장하면 지워진 채로 남는다")
     func honoursClearedNetworkNames() throws {
         // 예전에는 넘어온 목록이 비면 옛 목록을 되살렸다. 화면에 그 칸이 없던 시절의 보호막인데,

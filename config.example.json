@@ -8,6 +8,8 @@
     "",
     "service        : networksetup 이 쓰는 네트워크 서비스 이름. 보통 'Wi-Fi'.",
     "defaultProfile : 어떤 SSID 에도 걸리지 않을 때 적용할 프로필 이름.",
+    "                 반드시 mode 가 'dhcp' 인 프로필이어야 합니다. 여기에 고정 IP 프로필을 적으면",
+    "                 집·카페·호텔 등 목록에 없는 모든 Wi-Fi 에 사내 IP·DNS 가 걸려 인터넷이 끊깁니다.",
     "profiles[].name   : 영문·숫자로 시작, 이후 영문·숫자·_·- 만, 최대 16자.",
     "profiles[].mode   : 'manual'(고정 IP) 또는 'dhcp'(자동).",
     "profiles[].ip     : mode 가 manual 일 때만. 서브넷 안의 호스트 주소.",
