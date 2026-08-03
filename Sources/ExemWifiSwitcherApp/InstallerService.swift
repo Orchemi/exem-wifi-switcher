@@ -61,7 +61,10 @@ enum InstallerService {
             return .failure(.unavailable("\(error)"))
         }
 
-        let result = await Task.detached { try? SystemCommand.run(arguments) }.value
+        // 설치 계획은 스크립트 하나가 여러 명령을 부르며 만든다. 읽기 상한보다 넉넉히 준다.
+        let result = await Task.detached {
+            try? SystemCommand.run(arguments, timeout: SystemCommand.scriptTimeout)
+        }.value
         guard let result else {
             return .failure(.unavailable("계획을 확인하지 못했습니다: \(path)"))
         }

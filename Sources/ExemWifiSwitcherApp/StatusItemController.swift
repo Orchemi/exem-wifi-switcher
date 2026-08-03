@@ -242,13 +242,17 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             return
         }
         isRefreshing = true
+        // 래치는 **어떤 길로 빠져나가도** 풀려야 한다. 켜진 채 굳으면 이후의 모든 요청이
+        // `refreshQueued` 만 찍고 사라져 자동 전환이 조용히 멈춘다. 화면에는 마지막 상태가
+        // 그대로 남아 사용자는 정상으로 읽고, 빠져나올 길은 앱 재실행뿐이다.
+        // (읽기가 매달리는 경로는 `SystemCommand` 의 상한이 막는다. 이 defer 는 그다음 방어선이다.)
+        defer { isRefreshing = false }
         repeat {
             // 이번 회차가 소화할 요청이므로 먼저 내린다. 읽는 동안 새로 들어온 요청만 다음 회차로 남는다.
             refreshQueued = false
             await readSystem()
             evaluateAutoSwitch()
         } while refreshQueued
-        isRefreshing = false
     }
 
     private func render() {
