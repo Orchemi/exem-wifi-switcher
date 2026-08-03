@@ -64,7 +64,8 @@ struct AppBundleTests {
         )
         #expect(script.contains("swift build"))
         #expect(!script.contains("xcodebuild"))
-        // 유료 인증서가 없다. ad-hoc(-) 서명으로 번들 식별자에 권한을 귀속시킨다.
+        // 인증서를 주지 않으면 ad-hoc(-) 으로 서명한다. 인증서가 사라져도 빌드가 되어야 하므로
+        // 이것이 기본값이고, Developer ID 는 SIGN_IDENTITY 를 줄 때만 쓴다.
         #expect(script.contains("--sign -"))
         #expect(script.contains("codesign --verify"))
     }

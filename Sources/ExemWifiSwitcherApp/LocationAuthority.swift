@@ -7,7 +7,10 @@ import WifiSwitcherCore
 /// 상태 자체(`LocationAuthorizationState`)는 코어에 있다 — SSID 판독과 권한 점검이 함께 쓴다.
 /// 여기는 `CLLocationManager` 를 만지는 유일한 자리다.
 ///
-/// 권한은 **번들 식별자에 귀속**되므로 한 번 승인하면 재빌드해도 유지된다.
+/// 권한은 번들 식별자가 아니라 **코드 서명에 매인다**(`docs/updating.md`). 배포본은 Developer ID 로
+/// 서명하고 공증해 신원이 고정이라 한 번 승인하면 새 버전에서도 유지되지만, `SIGN_IDENTITY` 없이
+/// 직접 빌드한 ad-hoc 번들은 빌드마다 서명이 달라져 승인이 매번 풀린다.
+/// (번들 식별자에 매이는 것은 알림 권한과 로그인 항목이다.)
 @MainActor
 final class LocationAuthority: NSObject, CLLocationManagerDelegate {
 
